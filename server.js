@@ -690,10 +690,25 @@ async function seedAdmin() {
     if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) return;
     const { data: existing } = await getSupabase()
       .from('clients')
-      .select('id')
+      .select('id, password')
       .eq('email', 'admin@brisamotors.co.ke')
       .single();
-    if (existing) return;
+
+    if (existing) {
+      // The row already exists (likely inserted by schema.sql with a
+      // placeholder hash that doesn't actually match 'Admin@1234').
+      // Self-heal: if the hardcoded password doesn't verify, reset it.
+      const matches = existing.password
+        ? await bcrypt.compare('Admin@1234', existing.password)
+        : false;
+      if (!matches) {
+        const hash = await bcrypt.hash('Admin@1234', 10);
+        await getSupabase().from('clients').update({ password: hash }).eq('id', existing.id);
+        console.log('🔧  Admin password was out of sync — reset to admin@brisamotors.co.ke / Admin@1234');
+      }
+      return;
+    }
+
     const hash = await bcrypt.hash('Admin@1234', 10);
     await getSupabase().from('clients').insert({
       name: 'Brisa Admin',
@@ -708,6 +723,11 @@ async function seedAdmin() {
     console.warn('⚠️  Admin seed skipped:', e.message);
   }
 }
+
+// Run on module load too (not just app.listen), so this self-heals even
+// when deployed as a serverless function on Vercel, where app.listen
+// never executes but the module is still loaded on each cold start.
+seedAdmin();
 
 /* Start */
 if (require.main === module) {
