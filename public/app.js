@@ -3,6 +3,27 @@
 /* ── API base URL ────────────────────────────────────────────────── */
 const API = '';   /* Same origin — server.js serves this file */
 
+/* ── Car image map (make + model → image URL) ───────────────────── */
+const CAR_IMAGES = {
+  'toyota corolla':      'https://w0.peakpx.com/wallpaper/951/766/HD-wallpaper-toyota-corolla-2020-side-view-new-silver-corolla-exterior-sedan-japanese-cars-toyota-thumbnail.jpg',
+  'toyota hilux':        'https://upload.wikimedia.org/wikipedia/commons/thumb/7/7f/2021_Toyota_Hilux_Invincible_D-4D_2.8_%28facelift%2C_silver%29%2C_front_8.22.jpg/1280px-2021_Toyota_Hilux_Invincible_D-4D_2.8_%28facelift%2C_silver%29%2C_front_8.22.jpg',
+  'mazda cx-5':          'https://hips.hearstapps.com/hmg-prod/images/2026-mazda-cx-5-exterior-pr-101-686d61452f8db.jpg',
+  'bmw 3 series':        'https://static.cargurus.com/images/forsale/2026/04/13/22/10/2018_bmw_3_series-pic-6016570562730503913-1024x768.jpeg?io=true&width=640&height=480&fit=bounds&format=jpg&auto=webp',
+  'subaru forester':     'https://file.kelleybluebookimages.com/kbb/base/evox/CP/12664/2020-Subaru-Forester-front_12664_032_1849x898_K1X_cropped.png',
+  'mercedes c-class':    'https://di-uploads-pod5.dealerinspire.com/mercedesbenzofsugarland/uploads/2019/02/2019-Mercedes-Benz-C-Class-Sedan-white-front-exterior.jpg',
+  'honda cr-v':          'https://pictures.dealer.com/h/hondaofforthworth/0206/9a40c63b28132514a91c22eba703f80ax.jpg',
+  'nissan x-trail':      'https://www.carscoops.com/wp-content/uploads/2019/11/2021-Nissan-Rogue-X-Trail-Carscoops-1.jpg',
+  'land rover discovery':'https://di-shared-assets.dealerinspire.com/legacy/rackspace/ldm-images/2020-Land-Rover-Discovery-Indus-Silver.jpg',
+  'kawasaki ninja':      'https://i0.wp.com/audi2021.com/wp-content/uploads/2020/01/2021-Audi-RS5-Exterior.png?resize=700,383&ssl=1',
+  'kia sportage':        'https://imgcdn.zigwheels.us/large/gallery/color/3/21/kia-sportage-color-918367.jpg',
+  'volkswagen tiguan':   'https://file.kelleybluebookimages.com/kbb/base/evox/CP/14177/2021-Volkswagen-Tiguan-front_14177_032_1831x863_K2K2_cropped.png',
+};
+
+function getCarImage(make, model) {
+  const key = `${(make || '').toLowerCase()} ${(model || '').toLowerCase()}`;
+  return CAR_IMAGES[key] || null;
+}
+
 /* ── State ──────────────────────────────────────────────────────── */
 let token     = localStorage.getItem('bm_token') || null;
 let currentUser = null;
@@ -193,9 +214,13 @@ function renderCars(list) {
   grid.innerHTML = cars.map(c => {
     const available = c.quantity > 0 && c.status !== 'sold_out';
     const badge     = available ? `<span class="badge badge-green">Available</span>` : `<span class="badge badge-red">Sold Out</span>`;
+    const imgUrl    = getCarImage(c.make, c.model);
+    const imgHtml   = imgUrl
+      ? `<img src="${imgUrl}" alt="${esc(c.make)} ${esc(c.model)}" loading="lazy" onerror="this.parentElement.innerHTML='<span style=\\'font-size:3rem\\'>🚙</span>'" />`
+      : `<span style="font-size:3rem">🚙</span>`;
     return `
     <div class="card">
-      <div class="card-img">🚙</div>
+      <div class="card-img">${imgHtml}</div>
       <div class="card-body">
         ${badge}
         <div class="card-title" style="margin-top:.5rem">${esc(c.make)} ${esc(c.model)}</div>
