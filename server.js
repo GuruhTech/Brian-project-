@@ -13,25 +13,17 @@ const { createClient } = require('@supabase/supabase-js');
 
 dotenv.config();
 
-const PORT               = parseInt(process.env.PORT || '5000', 10);
-const JWT_SECRET         = process.env.JWT_SECRET || 'brisa_motors_secret_v3';
-const SUPABASE_URL       = process.env.SUPABASE_URL || '';
+const PORT                = parseInt(process.env.PORT || '5000', 10);
+const JWT_SECRET          = process.env.JWT_SECRET || 'brisa_motors_jwt_v3_secret_key';
+const SUPABASE_URL        = process.env.SUPABASE_URL || '';
 const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY || '';
-const MPESA_ENV          = process.env.MPESA_ENV || 'sandbox';
-const MPESA_SHORTCODE    = process.env.MPESA_SHORTCODE || '174379';
-const MPESA_PASSKEY      = process.env.MPESA_PASSKEY || '';
-const MPESA_CONSUMER_KEY    = process.env.MPESA_CONSUMER_KEY || '';
-const MPESA_CONSUMER_SECRET = process.env.MPESA_CONSUMER_SECRET || '';
-const MPESA_CALLBACK_URL    = process.env.MPESA_CALLBACK_URL || null;
-const MPESA_BASE         = MPESA_ENV === 'live' ? 'https://api.safaricom.co.ke' : 'https://sandbox.safaricom.co.ke';
-const MPESA_OAUTH_PATH   = '/oauth/v1/generate?grant_type=client_credentials';
-const MPESA_STK_PUSH_PATH = '/mpesa/stkpush/v1/processrequest';
+const PAYSTACK_SECRET_KEY = process.env.PAYSTACK_SECRET_KEY || '';
 
 if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) {
   console.error('❌  SUPABASE_URL and SUPABASE_SERVICE_KEY must be set in environment variables.');
 }
-if (!MPESA_PASSKEY || !MPESA_CONSUMER_KEY || !MPESA_CONSUMER_SECRET) {
-  console.warn('⚠️  M-Pesa config is incomplete. Set MPESA_PASSKEY, MPESA_CONSUMER_KEY, MPESA_CONSUMER_SECRET.');
+if (!PAYSTACK_SECRET_KEY) {
+  console.warn('⚠️  PAYSTACK_SECRET_KEY is not set. Payment features will not work.');
 }
 
 /* ── Supabase client (lazy) ──────────────────────────────────────── */
@@ -43,31 +35,26 @@ function getSupabase() {
   }
   return _supabase;
 }
-/* Proxy so existing code can call `supabase.from(...)` unchanged */
 const supabase = new Proxy({}, {
   get(_, prop) { return (...args) => getSupabase()[prop](...args); },
 });
 
-/* Helper: throw on Supabase error */
 function sb(result) {
   if (result.error) throw new Error(result.error.message);
   return result.data;
 }
 
-/* ── M-Pesa helpers ─────────────────────────────────────────────── */
-let mpesaTokenCache = { token: null, expiresAt: 0 };
-
-function darajaRequest(method, reqPath, body = null, authHeader = null) {
+/* ── Paystack helpers ───────────────────────────────────────────── */
+function paystackRequest(method, reqPath, body = null) {
   return new Promise((resolve, reject) => {
-    const baseUrl = new URL(MPESA_BASE);
     const data    = body ? JSON.stringify(body) : null;
     const options = {
-      hostname: baseUrl.hostname,
-      path: reqPath,
+      hostname: 'api.paystack.co',
+      path:     reqPath,
       method,
       headers: {
-        'Content-Type': 'application/json',
-        ...(authHeader ? { Authorization: authHeader } : {}),
+        'Authorization': `Bearer ${PAYSTACK_SECRET_KEY}`,
+        'Content-Type':  'application/json',
         ...(data ? { 'Content-Length': Buffer.byteLength(data) } : {}),
       },
     };
@@ -76,7 +63,7 @@ function darajaRequest(method, reqPath, body = null, authHeader = null) {
       res.on('data', chunk => raw += chunk);
       res.on('end', () => {
         try { resolve(raw ? JSON.parse(raw) : {}); }
-        catch (e) { reject(new Error(`Daraja parse error: ${e.message} | ${raw}`)); }
+        catch (e) { reject(new Error(`Paystack parse error: ${e.message} | ${raw}`)); }
       });
     });
     req.on('error', reject);
@@ -85,39 +72,27 @@ function darajaRequest(method, reqPath, body = null, authHeader = null) {
   });
 }
 
-async function getMpesaAccessToken() {
-  if (mpesaTokenCache.token && Date.now() < mpesaTokenCache.expiresAt - 60000) return mpesaTokenCache.token;
-  if (!MPESA_CONSUMER_KEY || !MPESA_CONSUMER_SECRET) throw new Error('M-Pesa credentials not configured.');
-  const auth   = Buffer.from(`${MPESA_CONSUMER_KEY}:${MPESA_CONSUMER_SECRET}`).toString('base64');
-  const result = await darajaRequest('GET', MPESA_OAUTH_PATH, null, `Basic ${auth}`);
-  if (!result.access_token) throw new Error(`M-Pesa auth failed: ${JSON.stringify(result)}`);
-  mpesaTokenCache.token     = result.access_token;
-  mpesaTokenCache.expiresAt = Date.now() + ((result.expires_in || 3600) * 1000);
-  return result.access_token;
-}
-
-function formatMpesaPhone(phone) {
-  let raw = String(phone || '').trim().replace(/[\s\-\(\)]/g, '');
-  if (raw.startsWith('+')) raw = raw.slice(1);
-  if (raw.startsWith('0')) raw = '254' + raw.slice(1);
-  if (!raw.startsWith('254')) raw = '254' + raw;
-  return raw;
+function verifyPaystackWebhook(rawBody, signature) {
+  const hash = crypto.createHmac('sha512', PAYSTACK_SECRET_KEY).update(rawBody).digest('hex');
+  return hash === signature;
 }
 
 /* ── Express app ────────────────────────────────────────────────── */
 const app = express();
 app.use(express.static(path.join(__dirname, 'public')));
 app.use(cors({ origin: '*' }));
+
+/* Raw body needed for webhook signature verification */
+app.use('/api/payments/paystack/webhook', express.raw({ type: 'application/json' }));
 app.use(express.json({ limit: '2mb' }));
 
 /* ── Helpers ────────────────────────────────────────────────────── */
 const fmtKsh = n => 'Ksh ' + Number(n).toLocaleString('en-KE', { minimumFractionDigits: 0 });
-
 function makeToken(u) {
   return jwt.sign({ id: u.id, email: u.email, role: u.role, name: u.name }, JWT_SECRET, { expiresIn: '7d' });
 }
-
 function nowISO() { return new Date().toISOString(); }
+function uniqueRef() { return `BM-${Date.now()}-${crypto.randomBytes(4).toString('hex').toUpperCase()}`; }
 
 async function getUserSummary(clientId) {
   const [apptRes, repairRes, payRes, invRes] = await Promise.all([
@@ -126,20 +101,18 @@ async function getUserSummary(clientId) {
     supabase.from('payments').select('*').eq('client_id', clientId),
     supabase.from('invoices').select('*').eq('client_id', clientId),
   ]);
-  const appointments = (apptRes.data || []).sort((a, b) => (b.appointment_date || '').localeCompare(a.appointment_date || ''));
+  const appointments = (apptRes.data  || []).sort((a, b) => (b.appointment_date || '').localeCompare(a.appointment_date || ''));
   const repairs      = (repairRes.data || []).sort((a, b) => (b.resolved_at || '').localeCompare(a.resolved_at || ''));
-  const payments     = (payRes.data || []).sort((a, b) => (b.paid_at || '').localeCompare(a.paid_at || ''));
-  const invoices     = (invRes.data || []).sort((a, b) => (b.issued_at || '').localeCompare(a.issued_at || ''));
+  const payments     = (payRes.data   || []).sort((a, b) => (b.paid_at || '').localeCompare(a.paid_at || ''));
+  const invoices     = (invRes.data   || []).sort((a, b) => (b.issued_at || '').localeCompare(a.issued_at || ''));
 
   const enrichedAppts = appointments.map(a => {
     const r = repairs.find(r => r.appointment_id === a.id);
     return { ...a, report_id: r?.id || null, diagnosis: r?.diagnosis || null, total_cost: r?.total_cost || null, payment_status: r?.payment_status || null };
   });
-
   const today      = new Date().toISOString().slice(0, 10);
   const upcoming   = enrichedAppts.filter(a => a.status === 'scheduled' && a.appointment_date >= today);
   const totalSpent = payments.reduce((s, p) => s + parseFloat(p.amount || 0), 0);
-
   return {
     stats: {
       total_visits:    appointments.length,
@@ -156,12 +129,12 @@ async function getUserSummary(clientId) {
 }
 
 async function createInvoice(clientId, paymentId, type, refId, lineItems, amount) {
-  const sub    = amount / 1.16;
-  const tax    = amount - sub;
+  const sub       = amount / 1.16;
+  const tax       = amount - sub;
   const clientRes = await supabase.from('clients').select('name,email,phone').eq('id', clientId).single();
-  const client = clientRes.data || {};
-  const month  = new Date().toISOString().slice(0, 7).replace('-', '');
-  const invRes = await supabase.from('invoices').insert({
+  const client    = clientRes.data || {};
+  const month     = new Date().toISOString().slice(0, 7).replace('-', '');
+  const invRes    = await supabase.from('invoices').insert({
     client_id: clientId, payment_id: paymentId, invoice_type: type, reference_id: refId,
     line_items: lineItems, subtotal: sub.toFixed(2), tax_rate: 16, tax_amount: tax.toFixed(2),
     total_amount: amount.toFixed(2), status: 'paid', issued_at: nowISO(),
@@ -180,10 +153,10 @@ async function createInvoice(clientId, paymentId, type, refId, lineItems, amount
 
 async function formatInvoice(invoice) {
   const [payRes, clientRes] = await Promise.all([
-    supabase.from('payments').select('method,status,mpesa_code').eq('id', invoice.payment_id).single(),
+    supabase.from('payments').select('method,status,paystack_ref').eq('id', invoice.payment_id).single(),
     supabase.from('clients').select('name,email,phone').eq('id', invoice.client_id).single(),
   ]);
-  const payment = payRes.data || {};
+  const payment = payRes.data  || {};
   const client  = clientRes.data || {};
   return {
     id: invoice.id, invoice_number: invoice.invoice_number, invoice_type: invoice.invoice_type,
@@ -191,7 +164,7 @@ async function formatInvoice(invoice) {
     tax_rate: invoice.tax_rate, tax_amount: invoice.tax_amount, total_amount: invoice.total_amount,
     status: invoice.status, issued_at: invoice.issued_at,
     method: payment.method || null, payment_status: payment.status || null,
-    mpesa_code: payment.mpesa_code || null,
+    paystack_ref: payment.paystack_ref || null,
     client_name: client.name || null, client_email: client.email || null, client_phone: client.phone || null,
   };
 }
@@ -213,7 +186,7 @@ const go = fn => async (req, res, next) => {
 
 app.get('/api/status', go(async (req, res) => {
   const { count } = await supabase.from('clients').select('*', { count: 'exact', head: true });
-  res.json({ server: 'online', db: 'supabase', version: '3.0.0', clients: count || 0 });
+  res.json({ server: 'online', db: 'supabase', payments: 'paystack', version: '3.0.0', clients: count || 0 });
 }));
 
 /* Auth */
@@ -303,9 +276,8 @@ app.post('/api/auth/reset-password', go(async (req, res) => {
 }));
 
 app.get('/api/auth/verify-reset-token', go(async (req, res) => {
-  const { data: reset } = await supabase.from('resets').select('email').eq('token', req.query.token).eq('used', false).single();
-  if (!reset) return res.status(400).json({ valid: false, error: 'Token is invalid or expired.' });
-  if (new Date(reset.expires) <= new Date()) return res.status(400).json({ valid: false, error: 'Token is invalid or expired.' });
+  const { data: reset } = await supabase.from('resets').select('email,expires').eq('token', req.query.token).eq('used', false).single();
+  if (!reset || new Date(reset.expires) <= new Date()) return res.status(400).json({ valid: false, error: 'Token is invalid or expired.' });
   res.json({ valid: true, email: reset.email });
 }));
 
@@ -397,26 +369,189 @@ app.post('/api/repairs/report', auth, adminOnly, go(async (req, res) => {
   let client_id = req.user.id, car_plate = null;
   if (appointment_id) {
     const { data: a } = await supabase.from('appointments').select('*').eq('id', Number(appointment_id)).single();
-    if (a) {
-      client_id = a.client_id; car_plate = a.car_plate;
-      await supabase.from('appointments').update({ status: 'completed' }).eq('id', a.id);
-    }
+    if (a) { client_id = a.client_id; car_plate = a.car_plate; await supabase.from('appointments').update({ status: 'completed' }).eq('id', a.id); }
   }
   const result = await supabase.from('repairs').insert({ appointment_id: appointment_id || null, client_id, car_plate: car_plate || null, diagnosis, parts_used: parts_used || [], labor_hours: labor_hours || 0, total_cost, mechanic_notes: mechanic_notes || null, payment_status: 'unpaid', resolved_at: nowISO() }).select().single();
   if (result.error) throw new Error(result.error.message);
   res.status(201).json({ id: result.data.id, message: 'Report created.' });
 }));
 
-/* Payments */
+/* ── Paystack Payments ──────────────────────────────────────────── */
+
+/*
+  Initialize a Paystack payment for any item type.
+  Body: { payment_type: 'car_sale'|'part_order'|'repair', reference_id, quantity? }
+  Returns: { authorization_url, reference, payment_id }
+  → Redirect user to authorization_url to complete payment.
+*/
+app.post('/api/payments/paystack/initialize', auth, go(async (req, res) => {
+  if (!PAYSTACK_SECRET_KEY) return res.status(500).json({ error: 'Paystack is not configured. Set PAYSTACK_SECRET_KEY.' });
+  const { payment_type, reference_id, quantity } = req.body || {};
+  if (!payment_type || !reference_id) return res.status(400).json({ error: 'payment_type and reference_id are required.' });
+
+  const { data: client } = await supabase.from('clients').select('*').eq('id', req.user.id).single();
+  if (!client) return res.status(404).json({ error: 'Client not found.' });
+
+  let amount, description, itemCount = 1;
+
+  if (payment_type === 'car_sale') {
+    const { data: car } = await supabase.from('cars').select('*').eq('id', Number(reference_id)).single();
+    if (!car) return res.status(404).json({ error: 'Car not found.' });
+    if (car.quantity < 1 || car.status === 'sold_out') return res.status(400).json({ error: 'This car is no longer available.' });
+    amount      = parseFloat(car.price);
+    description = `Car purchase: ${car.make} ${car.model} ${car.year}`;
+  } else if (payment_type === 'part_order') {
+    const { data: part } = await supabase.from('parts').select('*').eq('id', Number(reference_id)).single();
+    if (!part) return res.status(404).json({ error: 'Part not found.' });
+    const qty = parseInt(quantity) || 1;
+    if (part.stock < qty) return res.status(400).json({ error: `Only ${part.stock} units available.` });
+    amount      = Number(part.price) * qty;
+    description = `Parts: ${part.name} ×${qty}`;
+    itemCount   = qty;
+  } else if (payment_type === 'repair') {
+    const { data: report } = await supabase.from('repairs').select('*').eq('id', Number(reference_id)).eq('client_id', req.user.id).single();
+    if (!report) return res.status(404).json({ error: 'Repair report not found.' });
+    if (report.payment_status === 'paid') return res.status(400).json({ error: 'Repair is already paid.' });
+    amount      = parseFloat(report.total_cost);
+    description = `Repair: ${report.diagnosis}`;
+  } else {
+    return res.status(400).json({ error: 'Invalid payment_type. Use car_sale, part_order, or repair.' });
+  }
+
+  const reference = uniqueRef();
+
+  /* Paystack amount is in the smallest currency unit (kobo for NGN, pesewas for GHS, cents for KES etc.) */
+  const paystackAmount = Math.round(amount * 100);
+
+  const paystackRes = await paystackRequest('POST', '/transaction/initialize', {
+    email:     client.email,
+    amount:    paystackAmount,
+    currency:  'KES',
+    reference,
+    metadata: {
+      payment_type, reference_id: Number(reference_id), quantity: itemCount,
+      client_id: client.id, description,
+    },
+  });
+
+  if (!paystackRes.status || !paystackRes.data?.authorization_url) {
+    throw new Error(paystackRes.message || 'Paystack initialization failed.');
+  }
+
+  const payRes = await supabase.from('payments').insert({
+    client_id: client.id, payment_type, reference_id: Number(reference_id),
+    quantity: itemCount, amount, method: 'paystack',
+    paystack_ref: reference, paystack_code: paystackRes.data.access_code,
+    status: 'pending', created_at: nowISO(),
+  }).select().single();
+  if (payRes.error) throw new Error(payRes.error.message);
+
+  res.json({
+    authorization_url: paystackRes.data.authorization_url,
+    reference,
+    access_code: paystackRes.data.access_code,
+    payment_id:  payRes.data.id,
+    amount,
+    description,
+  });
+}));
+
+/*
+  Verify a Paystack payment by reference (call after redirect or to check status).
+  GET /api/payments/paystack/verify/:reference
+*/
+app.get('/api/payments/paystack/verify/:reference', auth, go(async (req, res) => {
+  if (!PAYSTACK_SECRET_KEY) return res.status(500).json({ error: 'Paystack is not configured.' });
+  const reference = req.params.reference;
+
+  const { data: record } = await supabase.from('payments').select('*').eq('paystack_ref', reference).single();
+  if (!record) return res.status(404).json({ error: 'Payment record not found.' });
+
+  if (record.status === 'completed') {
+    const invoice = record.invoice_id ? (await supabase.from('invoices').select('*').eq('id', record.invoice_id).single()).data : null;
+    return res.json({ status: 'completed', payment_id: record.id, invoice: invoice ? await formatInvoice(invoice) : null });
+  }
+
+  const paystackRes = await paystackRequest('GET', `/transaction/verify/${encodeURIComponent(reference)}`);
+  if (!paystackRes.status) throw new Error(paystackRes.message || 'Paystack verification failed.');
+
+  const txn = paystackRes.data;
+  if (txn.status !== 'success') {
+    await supabase.from('payments').update({ status: txn.status === 'abandoned' ? 'failed' : 'pending' }).eq('paystack_ref', reference);
+    return res.json({ status: txn.status, message: 'Payment not yet completed.' });
+  }
+
+  /* Complete the payment */
+  await fulfillPayment(record, txn.amount / 100);
+
+  const { data: updated } = await supabase.from('payments').select('*').eq('paystack_ref', reference).single();
+  const invoice = updated?.invoice_id ? (await supabase.from('invoices').select('*').eq('id', updated.invoice_id).single()).data : null;
+  res.json({ status: 'completed', payment_id: record.id, invoice: invoice ? await formatInvoice(invoice) : null });
+}));
+
+/*
+  Paystack webhook — Paystack posts here on payment success/failure.
+  Set this URL in your Paystack dashboard: https://yourdomain.com/api/payments/paystack/webhook
+*/
+app.post('/api/payments/paystack/webhook', go(async (req, res) => {
+  const signature = req.headers['x-paystack-signature'];
+  const rawBody   = req.body;
+  if (!verifyPaystackWebhook(rawBody, signature)) return res.status(400).json({ error: 'Invalid signature.' });
+
+  const event = JSON.parse(rawBody.toString());
+  if (event.event !== 'charge.success') return res.sendStatus(200);
+
+  const { reference, amount } = event.data;
+  const { data: record } = await supabase.from('payments').select('*').eq('paystack_ref', reference).single();
+  if (!record || record.status === 'completed') return res.sendStatus(200);
+
+  await fulfillPayment(record, amount / 100);
+  res.sendStatus(200);
+}));
+
+/* Shared fulfillment logic (called by both verify and webhook) */
+async function fulfillPayment(record, amount) {
+  await supabase.from('payments').update({ status: 'completed', paid_at: nowISO() }).eq('id', record.id);
+
+  if (record.payment_type === 'car_sale') {
+    const { data: car } = await supabase.from('cars').select('*').eq('id', record.reference_id).single();
+    if (car) { const q = Math.max(0, car.quantity - 1); await supabase.from('cars').update({ quantity: q, status: q === 0 ? 'sold_out' : car.status }).eq('id', car.id); }
+  }
+  if (record.payment_type === 'part_order') {
+    const { data: part } = await supabase.from('parts').select('*').eq('id', record.reference_id).single();
+    if (part) await supabase.from('parts').update({ stock: Math.max(0, part.stock - (record.quantity || 1)) }).eq('id', part.id);
+  }
+  if (record.payment_type === 'repair') {
+    await supabase.from('repairs').update({ payment_status: 'paid' }).eq('id', record.reference_id);
+  }
+
+  const lineItems = [];
+  if (record.payment_type === 'car_sale') {
+    const { data: car } = await supabase.from('cars').select('*').eq('id', record.reference_id).single() || {};
+    lineItems.push({ description: `${car?.make || ''} ${car?.model || ''} ${car?.year || ''}`.trim(), qty: 1, unit_price: (amount / 1.16).toFixed(2), total: (amount / 1.16).toFixed(2) });
+  } else if (record.payment_type === 'part_order') {
+    const { data: part } = await supabase.from('parts').select('*').eq('id', record.reference_id).single() || {};
+    const qty = record.quantity || 1;
+    lineItems.push({ description: `${part?.name || 'Part'} ×${qty}`, qty, unit_price: (parseFloat(part?.price) || 0).toFixed(2), total: ((parseFloat(part?.price) || 0) * qty).toFixed(2) });
+  } else if (record.payment_type === 'repair') {
+    const { data: report } = await supabase.from('repairs').select('*').eq('id', record.reference_id).single() || {};
+    lineItems.push({ description: `Repair — ${report?.diagnosis || 'Service'}`, qty: 1, unit_price: (amount / 1.16).toFixed(2), total: (amount / 1.16).toFixed(2) });
+  }
+
+  const invoice = await createInvoice(record.client_id, record.id, record.payment_type, record.reference_id, lineItems, amount);
+  await supabase.from('payments').update({ invoice_id: invoice.id, invoice_number: invoice.invoice_number }).eq('id', record.id);
+}
+
+/* Manual/cash payment for cars */
 app.post('/api/payments/car', auth, go(async (req, res) => {
-  const { car_id, method, mpesa_code } = req.body || {};
+  const { car_id, method } = req.body || {};
   if (!car_id || !method) return res.status(400).json({ error: 'Car ID and payment method are required.' });
-  if (method === 'mpesa' && !mpesa_code) return res.status(400).json({ error: 'M-Pesa code is required.' });
+  if (method === 'paystack') return res.status(400).json({ error: 'Use /api/payments/paystack/initialize for Paystack payments.' });
   const { data: car } = await supabase.from('cars').select('*').eq('id', Number(car_id)).single();
   if (!car) return res.status(404).json({ error: 'Car not found.' });
   if (car.quantity < 1 || car.status === 'sold_out') return res.status(400).json({ error: 'This car is no longer available.' });
-  const amount  = parseFloat(car.price);
-  const payRes  = await supabase.from('payments').insert({ client_id: req.user.id, payment_type: 'car_sale', reference_id: car.id, amount, method, mpesa_code: mpesa_code || null, status: 'completed', paid_at: nowISO() }).select().single();
+  const amount = parseFloat(car.price);
+  const payRes = await supabase.from('payments').insert({ client_id: req.user.id, payment_type: 'car_sale', reference_id: car.id, amount, method, status: 'completed', paid_at: nowISO() }).select().single();
   if (payRes.error) throw new Error(payRes.error.message);
   const newQty = car.quantity - 1;
   await supabase.from('cars').update({ quantity: newQty, status: newQty <= 0 ? 'sold_out' : car.status }).eq('id', car.id);
@@ -425,112 +560,17 @@ app.post('/api/payments/car', auth, go(async (req, res) => {
   res.status(201).json({ payment_id: payRes.data.id, amount, method, invoice, inventory: { remaining: newQty } });
 }));
 
-app.post('/api/payments/mpesa/initiate', auth, go(async (req, res) => {
-  const { payment_type, reference_id, quantity, phone } = req.body || {};
-  if (!payment_type || !reference_id) return res.status(400).json({ error: 'Payment type and reference ID are required.' });
-  if (!MPESA_CONSUMER_KEY || !MPESA_CONSUMER_SECRET || !MPESA_PASSKEY)
-    return res.status(500).json({ error: 'M-Pesa credentials are not configured.' });
-  const { data: client } = await supabase.from('clients').select('*').eq('id', req.user.id).single();
-  if (!client) return res.status(404).json({ error: 'Client not found.' });
-  const customerPhone = formatMpesaPhone(phone || client.phone || '');
-  if (!/^2547\d{8}$/.test(customerPhone)) return res.status(400).json({ error: 'A valid Kenyan phone number is required for M-Pesa.' });
-
-  let amount, description, accountReference, itemCount = 1;
-  if (payment_type === 'car_sale') {
-    const { data: car } = await supabase.from('cars').select('*').eq('id', Number(reference_id)).single();
-    if (!car) return res.status(404).json({ error: 'Car not found.' });
-    if (car.quantity < 1 || car.status === 'sold_out') return res.status(400).json({ error: 'This car is no longer available.' });
-    amount = parseFloat(car.price); description = `Car purchase: ${car.make} ${car.model}`; accountReference = `CAR${car.id}`;
-  } else if (payment_type === 'part_order') {
-    const { data: part } = await supabase.from('parts').select('*').eq('id', Number(reference_id)).single();
-    if (!part) return res.status(404).json({ error: 'Part not found.' });
-    const qty = parseInt(quantity) || 1;
-    if (part.stock < qty) return res.status(400).json({ error: `Only ${part.stock} units are available.` });
-    amount = Number(part.price) * qty; description = `Part purchase: ${part.name} ×${qty}`; accountReference = `PART${part.id}`; itemCount = qty;
-  } else if (payment_type === 'repair') {
-    const { data: report } = await supabase.from('repairs').select('*').eq('id', Number(reference_id)).eq('client_id', req.user.id).single();
-    if (!report) return res.status(404).json({ error: 'Repair report not found.' });
-    if (report.payment_status === 'paid') return res.status(400).json({ error: 'Repair is already paid.' });
-    amount = parseFloat(report.total_cost); description = `Repair payment: ${report.diagnosis}`; accountReference = `REPAIR${report.id}`;
-  } else {
-    return res.status(400).json({ error: 'Invalid payment type.' });
-  }
-
-  const timestamp   = new Date().toISOString().replace(/[^0-9]/g, '').slice(0, 14);
-  const password    = Buffer.from(`${MPESA_SHORTCODE}${MPESA_PASSKEY}${timestamp}`).toString('base64');
-  const token       = await getMpesaAccessToken();
-  const callbackUrl = MPESA_CALLBACK_URL || `${req.protocol}://${req.get('host')}/api/payments/mpesa/callback`;
-  const payload     = { BusinessShortCode: MPESA_SHORTCODE, Password: password, Timestamp: timestamp, TransactionType: 'CustomerPayBillOnline', Amount: Math.round(amount), PartyA: customerPhone, PartyB: MPESA_SHORTCODE, PhoneNumber: customerPhone, CallBackURL: callbackUrl, AccountReference: accountReference, TransactionDesc: description };
-  const result      = await darajaRequest('POST', MPESA_STK_PUSH_PATH, payload, `Bearer ${token}`);
-  if (!result.CheckoutRequestID || result.ResponseCode !== '0') {
-    const errorMsg = result?.errorMessage || result?.ResponseDescription || result?.message || 'M-Pesa STK Push failed.';
-    return res.status(500).json({ error: `M-Pesa STK Push failed: ${errorMsg}`, details: result });
-  }
-  const payRes = await supabase.from('payments').insert({ client_id: req.user.id, payment_type, reference_id: Number(reference_id), quantity: itemCount, amount, method: 'mpesa', status: 'pending', mpesa_phone: customerPhone, merchant_request_id: result.MerchantRequestID, checkout_request_id: result.CheckoutRequestID, created_at: nowISO(), stk_message: result.CustomerMessage || null }).select().single();
-  if (payRes.error) throw new Error(payRes.error.message);
-  res.json({ message: 'STK Push sent. Complete payment on your phone.', checkout_request_id: result.CheckoutRequestID, merchant_request_id: result.MerchantRequestID, customer_message: result.CustomerMessage, payment_id: payRes.data.id });
-}));
-
-app.post('/api/payments/mpesa/callback', go(async (req, res) => {
-  const stk = req.body?.Body?.stkCallback;
-  if (!stk) return res.status(400).json({ error: 'Invalid M-Pesa callback payload.' });
-  const { MerchantRequestID, CheckoutRequestID, ResultCode, ResultDesc, CallbackMetadata } = stk;
-  const { data: record } = await supabase.from('payments').select('*').or(`checkout_request_id.eq.${CheckoutRequestID},merchant_request_id.eq.${MerchantRequestID}`).single();
-  if (!record) return res.status(404).json({ error: 'Pending M-Pesa payment not found.' });
-  if (ResultCode !== 0) {
-    await supabase.from('payments').update({ status: 'failed', result_code: ResultCode, result_desc: ResultDesc, callback_payload: req.body }).eq('id', record.id);
-    return res.json({ status: 'failed', detail: ResultDesc });
-  }
-  const metadata = Array.isArray(CallbackMetadata?.Item) ? CallbackMetadata.Item : [];
-  const receipt  = metadata.find(i => i.Name === 'MpesaReceiptNumber')?.Value || null;
-  const amount   = parseFloat(metadata.find(i => i.Name === 'Amount')?.Value || record.amount || 0);
-  const phone    = metadata.find(i => i.Name === 'PhoneNumber')?.Value || record.mpesa_phone;
-  await supabase.from('payments').update({ status: 'completed', paid_at: nowISO(), mpesa_code: receipt, mpesa_phone: phone, result_code: ResultCode, result_desc: ResultDesc, callback_payload: req.body }).eq('id', record.id);
-  if (record.payment_type === 'car_sale') {
-    const { data: car } = await supabase.from('cars').select('*').eq('id', record.reference_id).single();
-    if (car) { const q = Math.max(0, car.quantity - 1); await supabase.from('cars').update({ quantity: q, status: q === 0 ? 'sold_out' : car.status }).eq('id', car.id); }
-  }
-  if (record.payment_type === 'part_order') {
-    const { data: part } = await supabase.from('parts').select('*').eq('id', record.reference_id).single();
-    if (part) { await supabase.from('parts').update({ stock: Math.max(0, part.stock - (record.quantity || 1)) }).eq('id', part.id); }
-  }
-  if (record.payment_type === 'repair') {
-    await supabase.from('repairs').update({ payment_status: 'paid' }).eq('id', record.reference_id);
-  }
-  const invoiceItems = [];
-  if (record.payment_type === 'car_sale') {
-    const { data: car } = await supabase.from('cars').select('*').eq('id', record.reference_id).single() || {};
-    invoiceItems.push({ description: `${car?.make || 'Vehicle'} ${car?.model || ''} ${car?.year || ''}`.trim(), qty: 1, unit_price: (amount / 1.16).toFixed(2), total: (amount / 1.16).toFixed(2) });
-  } else if (record.payment_type === 'part_order') {
-    const { data: part } = await supabase.from('parts').select('*').eq('id', record.reference_id).single() || {};
-    const qty = record.quantity || 1;
-    invoiceItems.push({ description: `${part?.name || 'Part'} ×${qty}`, qty, unit_price: (parseFloat(part?.price) || 0).toFixed(2), total: ((parseFloat(part?.price) || 0) * qty).toFixed(2) });
-  } else if (record.payment_type === 'repair') {
-    const { data: report } = await supabase.from('repairs').select('*').eq('id', record.reference_id).single() || {};
-    invoiceItems.push({ description: `Repair — ${report?.diagnosis || 'Service'}`, qty: 1, unit_price: (amount / 1.16).toFixed(2), total: (amount / 1.16).toFixed(2) });
-  }
-  const invoice = await createInvoice(record.client_id, record.id, record.payment_type, record.reference_id, invoiceItems, amount);
-  await supabase.from('payments').update({ invoice_id: invoice.id, invoice_number: invoice.invoice_number }).eq('id', record.id);
-  res.json({ status: 'completed', invoice_number: invoice.invoice_number });
-}));
-
-app.get('/api/payments/mpesa/status/:id', auth, go(async (req, res) => {
-  const { data: payment } = await supabase.from('payments').select('*').or(`checkout_request_id.eq.${req.params.id},id.eq.${Number(req.params.id) || 0}`).single();
-  if (!payment) return res.status(404).json({ error: 'Payment request not found.' });
-  const invoice = payment.invoice_id ? (await supabase.from('invoices').select('*').eq('id', payment.invoice_id).single()).data : null;
-  res.json({ status: payment.status, checkout_request_id: payment.checkout_request_id, merchant_request_id: payment.merchant_request_id, mpesa_code: payment.mpesa_code, paid_at: payment.paid_at, result_desc: payment.result_desc, invoice: invoice ? await formatInvoice(invoice) : null });
-}));
-
+/* Manual/cash payment for parts */
 app.post('/api/payments/parts', auth, go(async (req, res) => {
-  const { part_id, quantity, method, mpesa_code } = req.body || {};
+  const { part_id, quantity, method } = req.body || {};
   if (!part_id || !method) return res.status(400).json({ error: 'Part ID and payment method are required.' });
-  if (method === 'mpesa' && !mpesa_code) return res.status(400).json({ error: 'M-Pesa code is required.' });
+  if (method === 'paystack') return res.status(400).json({ error: 'Use /api/payments/paystack/initialize for Paystack payments.' });
   const qty = parseInt(quantity) || 1;
   const { data: part } = await supabase.from('parts').select('*').eq('id', Number(part_id)).single();
   if (!part)            return res.status(404).json({ error: 'Part not found.' });
   if (part.stock < qty) return res.status(400).json({ error: `Only ${part.stock} in stock.` });
   const amount = parseFloat(part.price) * qty;
-  const payRes = await supabase.from('payments').insert({ client_id: req.user.id, payment_type: 'part_order', reference_id: part.id, quantity: qty, amount, method, mpesa_code: mpesa_code || null, status: 'completed', paid_at: nowISO() }).select().single();
+  const payRes = await supabase.from('payments').insert({ client_id: req.user.id, payment_type: 'part_order', reference_id: part.id, quantity: qty, amount, method, status: 'completed', paid_at: nowISO() }).select().single();
   if (payRes.error) throw new Error(payRes.error.message);
   await supabase.from('parts').update({ stock: part.stock - qty }).eq('id', part.id);
   const items   = [{ description: `${part.name} ×${qty}`, qty, unit_price: part.price, total: amount }];
@@ -538,15 +578,16 @@ app.post('/api/payments/parts', auth, go(async (req, res) => {
   res.status(201).json({ payment_id: payRes.data.id, amount, method, invoice, inventory: { remaining: part.stock - qty } });
 }));
 
+/* Manual/cash payment for repairs */
 app.post('/api/payments/repair', auth, go(async (req, res) => {
-  const { repair_report_id, method, mpesa_code } = req.body || {};
+  const { repair_report_id, method } = req.body || {};
   if (!repair_report_id || !method) return res.status(400).json({ error: 'Repair ID and method are required.' });
-  if (method === 'mpesa' && !mpesa_code) return res.status(400).json({ error: 'M-Pesa code is required.' });
+  if (method === 'paystack') return res.status(400).json({ error: 'Use /api/payments/paystack/initialize for Paystack payments.' });
   const { data: report } = await supabase.from('repairs').select('*').eq('id', Number(repair_report_id)).eq('client_id', req.user.id).single();
   if (!report) return res.status(404).json({ error: 'Repair report not found.' });
   if (report.payment_status === 'paid') return res.status(400).json({ error: 'Already paid.' });
   const amount = parseFloat(report.total_cost);
-  const payRes = await supabase.from('payments').insert({ client_id: req.user.id, payment_type: 'repair', reference_id: report.id, amount, method, mpesa_code: mpesa_code || null, status: 'completed', paid_at: nowISO() }).select().single();
+  const payRes = await supabase.from('payments').insert({ client_id: req.user.id, payment_type: 'repair', reference_id: report.id, amount, method, status: 'completed', paid_at: nowISO() }).select().single();
   if (payRes.error) throw new Error(payRes.error.message);
   await supabase.from('repairs').update({ payment_status: 'paid' }).eq('id', report.id);
   const items   = [{ description: `Repair — ${report.diagnosis}`, qty: 1, unit_price: (amount / 1.16).toFixed(2), total: (amount / 1.16).toFixed(2) }];
@@ -581,7 +622,7 @@ app.get('/api/admin/stats', auth, adminOnly, go(async (req, res) => {
     supabase.from('cars').select('*', { count: 'exact', head: true }),
     supabase.from('cars').select('*', { count: 'exact', head: true }).eq('status', 'sold_out'),
     supabase.from('appointments').select('*', { count: 'exact', head: true }),
-    supabase.from('payments').select('amount'),
+    supabase.from('payments').select('amount').eq('status', 'completed'),
     supabase.from('repairs').select('*', { count: 'exact', head: true }).eq('payment_status', 'unpaid'),
   ]);
   const revenue = (payRes.data || []).reduce((s, p) => s + parseFloat(p.amount || 0), 0);
@@ -592,13 +633,13 @@ app.get('/api/admin/reports/summary', auth, adminOnly, go(async (req, res) => {
   const [invRes, repairRes, payRes, apptRes, clientRes] = await Promise.all([
     supabase.from('invoices').select('*').order('issued_at', { ascending: false }),
     supabase.from('repairs').select('*').order('resolved_at', { ascending: false }),
-    supabase.from('payments').select('*'),
+    supabase.from('payments').select('*').eq('status', 'completed'),
     supabase.from('appointments').select('*'),
     supabase.from('clients').select('*'),
   ]);
-  const allInvoices = invRes.data || [];
+  const allInvoices = invRes.data  || [];
   const allRepairs  = repairRes.data || [];
-  const allPayments = payRes.data || [];
+  const allPayments = payRes.data  || [];
   const allAppts    = apptRes.data || [];
   const allClients  = clientRes.data || [];
 
@@ -639,14 +680,14 @@ app.use('/api/*', (req, res) => res.status(404).json({ error: `Not found: ${req.
 app.get('*', (req, res) => {
   const index = path.join(__dirname, 'public', 'index.html');
   if (fs.existsSync(index)) return res.sendFile(index);
-  res.json({ server: 'online', message: 'Brisa Motors API v3 (Supabase) — no frontend in /public' });
+  res.json({ server: 'online', message: 'Brisa Motors API v3 — Supabase + Paystack' });
 });
 app.use((err, req, res, _n) => { if (!res.headersSent) res.status(500).json({ error: err.message }); });
 
 /* Start */
 if (require.main === module) {
   app.listen(PORT, () => {
-    console.log(`\n🚗  Brisa Motors v3 (Supabase)`);
+    console.log(`\n🚗  Brisa Motors v3 (Supabase + Paystack)`);
     console.log(`   URL:    http://localhost:${PORT}`);
     console.log(`   Admin:  admin@brisamotors.co.ke  /  Admin@1234\n`);
   });

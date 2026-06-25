@@ -82,26 +82,20 @@ CREATE TABLE IF NOT EXISTS repairs (
 
 -- ── Payments ──────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS payments (
-  id                  SERIAL PRIMARY KEY,
-  client_id           INTEGER REFERENCES clients(id),
-  payment_type        TEXT,
-  reference_id        INTEGER,
-  quantity            INTEGER DEFAULT 1,
-  amount              NUMERIC,
-  method              TEXT,
-  mpesa_code          TEXT,
-  status              TEXT DEFAULT 'completed',
-  paid_at             TEXT,
-  created_at          TEXT DEFAULT to_char(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
-  mpesa_phone         TEXT,
-  merchant_request_id TEXT,
-  checkout_request_id TEXT,
-  stk_message         TEXT,
-  result_code         INTEGER,
-  result_desc         TEXT,
-  callback_payload    JSONB,
-  invoice_id          INTEGER,
-  invoice_number      TEXT
+  id             SERIAL PRIMARY KEY,
+  client_id      INTEGER REFERENCES clients(id),
+  payment_type   TEXT,
+  reference_id   INTEGER,
+  quantity       INTEGER DEFAULT 1,
+  amount         NUMERIC,
+  method         TEXT,
+  paystack_ref   TEXT,
+  paystack_code  TEXT,
+  status         TEXT DEFAULT 'pending',
+  paid_at        TEXT,
+  created_at     TEXT DEFAULT to_char(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+  invoice_id     INTEGER,
+  invoice_number TEXT
 );
 
 -- ── Invoices ──────────────────────────────────────────────────────
