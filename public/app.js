@@ -58,6 +58,7 @@ let allCars   = [];
 let allParts  = [];
 let dashData  = null;
 let adminData = null;
+let lastClientReport = null;
 
 /* ── Utilities ───────────────────────────────────────────────────── */
 function fmtKsh(n) {
@@ -594,11 +595,13 @@ async function changePassword(e) {
 async function loadAdmin() {
   if (!token) return;
   try {
-    const [summary, clients] = await Promise.all([
+    const [summary, clients, cars, parts] = await Promise.all([
       apiFetch('/api/admin/reports/summary'),
       apiFetch('/api/admin/clients'),
+      apiFetch('/api/cars'),
+      apiFetch('/api/parts'),
     ]);
-    adminData = { summary, clients };
+    adminData = { summary, clients, cars, parts };
     document.getElementById('adminStats').innerHTML = `
       <div class="stat-card"><div class="label">Clients</div><div class="value">${summary.clients_count}</div></div>
       <div class="stat-card"><div class="label">Cars Listed</div><div class="value">${summary.cars_count}</div><div class="sub">${summary.cars_sold} sold</div></div>
@@ -609,7 +612,7 @@ async function loadAdmin() {
     `;
     const tabs = [...document.querySelectorAll('#adminTabs .tab')];
     const activeBtn = tabs.find(t => t.classList.contains('active')) || tabs[0];
-    const tabNames = ['overview', 'clients', 'repairs', 'invoices'];
+    const tabNames = ['overview', 'clients', 'repairs', 'invoices', 'inventory'];
     const tabName = tabNames[tabs.indexOf(activeBtn)] || 'overview';
     switchAdminTab(tabName, activeBtn);
   } catch (err) { toast(err.message, 'error'); }
@@ -640,7 +643,7 @@ function switchAdminTab(tab, btn) {
         <td>${esc(c.email)}</td>
         <td>${esc(c.phone || '—')}</td>
         <td>${fmtDate(c.created_at)}</td>
-        <td><button class="btn btn-sm btn-outline" onclick="viewClient(${c.id})">View</button></td>
+        <td><button class="btn btn-sm btn-outline dark" onclick="viewClient(${c.id})">View</button></td>
       </tr>`).join('')}</tbody>
     </table></div>`;
   }
@@ -674,6 +677,54 @@ function switchAdminTab(tab, btn) {
       </tr>`).join('')}</tbody>
     </table></div>`;
   }
+
+  if (tab === 'inventory') {
+    const cars  = adminData.cars  || [];
+    const parts = adminData.parts || [];
+    el.innerHTML = `
+      <div class="dash-header" style="margin-top:1rem">
+        <h3 style="margin:0">Cars (${cars.length})</h3>
+        <button class="btn btn-sm btn-primary" onclick="openStockModal('car')">+ Add Car</button>
+      </div>
+      ${!cars.length ? empty('🚗', 'No cars listed', 'Add your first car above.') : `<div class="table-wrap"><table>
+        <thead><tr><th>Car</th><th>Year</th><th>Price</th><th>Qty</th><th>Status</th><th></th></tr></thead>
+        <tbody>${cars.map(c => `<tr>
+          <td>${esc(c.make)} ${esc(c.model)}</td>
+          <td>${c.year || '—'}</td>
+          <td><input type="number" id="carPrice${c.id}" value="${c.price}" style="width:100px" /></td>
+          <td><input type="number" id="carQty${c.id}" value="${c.quantity}" style="width:70px" /></td>
+          <td><span class="badge ${c.quantity > 0 && c.status !== 'sold_out' ? 'badge-green' : 'badge-red'}">${esc(c.status)}</span></td>
+          <td style="white-space:nowrap">
+            <button class="btn btn-sm btn-outline dark" onclick="quickUpdateCar(${c.id})">Save</button>
+            <button class="btn btn-sm btn-outline dark" onclick="openStockModal('car', ${c.id})">Edit</button>
+            <button class="btn btn-sm btn-outline dark" style="color:#dc2626;border-color:#dc2626" onclick="deleteStockItem('car', ${c.id})">Delete</button>
+          </td>
+        </tr>`).join('')}</tbody>
+      </table></div>`}
+
+      <div class="dash-header" style="margin-top:2rem">
+        <h3 style="margin:0">Parts (${parts.length})</h3>
+        <button class="btn btn-sm btn-primary" onclick="openStockModal('part')">+ Add Part</button>
+      </div>
+      ${!parts.length ? empty('🔩', 'No parts listed', 'Add your first part above.') : `<div class="table-wrap"><table>
+        <thead><tr><th>Part</th><th>Category</th><th>Price</th><th>Stock</th><th></th></tr></thead>
+        <tbody>${parts.map(p => `<tr>
+          <td>${esc(p.name)}${p.part_number ? `<br><span style="font-size:.75rem;color:#6b7280">${esc(p.part_number)}</span>` : ''}</td>
+          <td>${esc(p.category || '—')}</td>
+          <td><input type="number" id="partPrice${p.id}" value="${p.price}" style="width:100px" /></td>
+          <td>
+            <input type="number" id="partStock${p.id}" value="${p.stock}" style="width:70px" />
+            ${p.stock <= 5 ? `<span class="badge badge-amber" style="margin-left:.4rem">Low</span>` : ''}
+          </td>
+          <td style="white-space:nowrap">
+            <button class="btn btn-sm btn-outline dark" onclick="quickUpdatePart(${p.id})">Save</button>
+            <button class="btn btn-sm btn-outline dark" onclick="openStockModal('part', ${p.id})">Edit</button>
+            <button class="btn btn-sm btn-outline dark" style="color:#dc2626;border-color:#dc2626" onclick="deleteStockItem('part', ${p.id})">Delete</button>
+          </td>
+        </tr>`).join('')}</tbody>
+      </table></div>`}
+    `;
+  }
 }
 
 async function viewClient(id) {
@@ -683,10 +734,14 @@ async function viewClient(id) {
   modal.classList.add('open');
   try {
     const { client, summary } = await apiFetch('/api/admin/clients/' + id);
+    lastClientReport = { client, summary };
     const s = summary.stats;
     content.innerHTML = `
-      <h2>${esc(client.name)}</h2>
-      <p style="color:#6b7280;margin-top:-.5rem">${esc(client.email)} ${client.phone ? '&bull; ' + esc(client.phone) : ''} &bull; Joined ${fmtDate(client.created_at)}</p>
+      <div class="dash-header" style="margin-bottom:0">
+        <h2 style="margin-bottom:0">${esc(client.name)}</h2>
+        <button class="btn btn-sm btn-outline dark" onclick="printClientReport()">🖨️ Print Report</button>
+      </div>
+      <p style="color:#6b7280;margin-top:0">${esc(client.email)} ${client.phone ? '&bull; ' + esc(client.phone) : ''} &bull; Joined ${fmtDate(client.created_at)}</p>
       <div class="stats-row" style="margin:1rem 0">
         <div class="stat-card"><div class="label">Total Visits</div><div class="value">${s.total_visits}</div></div>
         <div class="stat-card"><div class="label">Total Spent</div><div class="value">${fmtKsh(s.total_spent)}</div></div>
@@ -731,6 +786,240 @@ async function viewClient(id) {
 }
 
 function closeClientModal() { document.getElementById('clientModal').classList.remove('open'); }
+
+/* ── INVENTORY ───────────────────────────────────────────────────── */
+async function quickUpdateCar(id) {
+  try {
+    const price    = Number(document.getElementById('carPrice' + id).value);
+    const quantity = Number(document.getElementById('carQty' + id).value);
+    await apiFetch('/api/admin/cars/' + id, { method: 'PUT', body: JSON.stringify({ price, quantity }) });
+    toast('Car updated.', 'success');
+    allCars = []; // force cars page to refetch fresh data next time it's viewed
+    loadAdmin();
+  } catch (err) { toast(err.message, 'error'); }
+}
+
+async function quickUpdatePart(id) {
+  try {
+    const price = Number(document.getElementById('partPrice' + id).value);
+    const stock = Number(document.getElementById('partStock' + id).value);
+    await apiFetch('/api/admin/parts/' + id, { method: 'PUT', body: JSON.stringify({ price, stock }) });
+    toast('Part updated.', 'success');
+    allParts = [];
+    loadAdmin();
+  } catch (err) { toast(err.message, 'error'); }
+}
+
+async function deleteStockItem(type, id) {
+  if (!confirm(`Delete this ${type}? This can't be undone.`)) return;
+  try {
+    await apiFetch(`/api/admin/${type}s/${id}`, { method: 'DELETE' });
+    toast(`${type === 'car' ? 'Car' : 'Part'} deleted.`, 'success');
+    if (type === 'car') allCars = []; else allParts = [];
+    loadAdmin();
+  } catch (err) { toast(err.message, 'error'); }
+}
+
+function openStockModal(type, id) {
+  const modal = document.getElementById('stockModal');
+  const content = document.getElementById('stockModalContent');
+  const isEdit = id != null;
+  const item = isEdit ? (type === 'car' ? adminData.cars : adminData.parts).find(x => x.id === id) : {};
+
+  if (type === 'car') {
+    content.innerHTML = `
+      <h2>${isEdit ? 'Edit Car' : 'Add New Car'}</h2>
+      <form onsubmit="submitStockForm(event,'car',${isEdit ? id : 'null'})">
+        <div class="form-grid">
+          <label>Make * <input id="sMake" required value="${esc(item.make || '')}" /></label>
+          <label>Model * <input id="sModel" required value="${esc(item.model || '')}" /></label>
+          <label>Year <input type="number" id="sYear" value="${item.year || ''}" /></label>
+          <label>Price (Ksh) * <input type="number" id="sPrice" required value="${item.price || ''}" /></label>
+          <label>Quantity <input type="number" id="sQuantity" value="${item.quantity ?? 1}" /></label>
+          <label>Mileage (km) <input type="number" id="sMileage" value="${item.mileage || ''}" /></label>
+          <label>Fuel Type
+            <select id="sFuel">
+              <option value="">—</option>
+              ${['Petrol','Diesel','Hybrid','Electric'].map(f => `<option ${item.fuel_type===f?'selected':''}>${f}</option>`).join('')}
+            </select>
+          </label>
+          <label>Body Type
+            <select id="sBody">
+              <option value="">—</option>
+              ${['Sedan','SUV','Hatchback','Pickup','Van','Coupe'].map(b => `<option ${item.body===b?'selected':''}>${b}</option>`).join('')}
+            </select>
+          </label>
+          <label>Drive <input id="sDrive" value="${esc(item.drive || '')}" /></label>
+          <label>Color <input id="sColor" value="${esc(item.color || '')}" /></label>
+          <label class="full-width">Description <textarea id="sDescription" rows="2">${esc(item.description || '')}</textarea></label>
+        </div>
+        <button type="submit" class="btn btn-primary btn-full">${isEdit ? 'Save Changes' : 'Add Car'}</button>
+      </form>`;
+  } else {
+    content.innerHTML = `
+      <h2>${isEdit ? 'Edit Part' : 'Add New Part'}</h2>
+      <form onsubmit="submitStockForm(event,'part',${isEdit ? id : 'null'})">
+        <div class="form-grid">
+          <label>Name * <input id="sName" required value="${esc(item.name || '')}" /></label>
+          <label>Part Number <input id="sPartNumber" value="${esc(item.part_number || '')}" /></label>
+          <label>Category <input id="sCategory" value="${esc(item.category || '')}" /></label>
+          <label>Price (Ksh) * <input type="number" id="sPrice" required value="${item.price || ''}" /></label>
+          <label>Stock <input type="number" id="sStock" value="${item.stock ?? 0}" /></label>
+          <label>Compatible Makes <input id="sCompatible" value="${esc(item.compatible_makes || '')}" /></label>
+          <label class="full-width">Description <textarea id="sDescription" rows="2">${esc(item.description || '')}</textarea></label>
+        </div>
+        <button type="submit" class="btn btn-primary btn-full">${isEdit ? 'Save Changes' : 'Add Part'}</button>
+      </form>`;
+  }
+  modal.classList.add('open');
+}
+
+function closeStockModal() { document.getElementById('stockModal').classList.remove('open'); }
+
+async function submitStockForm(e, type, id) {
+  e.preventDefault();
+  const isEdit = id != null;
+  let body;
+  if (type === 'car') {
+    body = {
+      make: document.getElementById('sMake').value,
+      model: document.getElementById('sModel').value,
+      year: document.getElementById('sYear').value,
+      price: document.getElementById('sPrice').value,
+      quantity: document.getElementById('sQuantity').value,
+      mileage: document.getElementById('sMileage').value,
+      fuel_type: document.getElementById('sFuel').value,
+      body: document.getElementById('sBody').value,
+      drive: document.getElementById('sDrive').value,
+      color: document.getElementById('sColor').value,
+      description: document.getElementById('sDescription').value,
+    };
+  } else {
+    body = {
+      name: document.getElementById('sName').value,
+      part_number: document.getElementById('sPartNumber').value,
+      category: document.getElementById('sCategory').value,
+      price: document.getElementById('sPrice').value,
+      stock: document.getElementById('sStock').value,
+      compatible_makes: document.getElementById('sCompatible').value,
+      description: document.getElementById('sDescription').value,
+    };
+  }
+  try {
+    const path = `/api/admin/${type}s` + (isEdit ? '/' + id : '');
+    await apiFetch(path, { method: isEdit ? 'PUT' : 'POST', body: JSON.stringify(body) });
+    toast(`${type === 'car' ? 'Car' : 'Part'} ${isEdit ? 'updated' : 'added'}!`, 'success');
+    closeStockModal();
+    if (type === 'car') allCars = []; else allParts = [];
+    loadAdmin();
+  } catch (err) { toast(err.message, 'error'); }
+}
+
+/* ── PRINT REPORTS ───────────────────────────────────────────────── */
+function printReport(title, bodyHtml) {
+  const win = window.open('', '_blank');
+  if (!win) { toast('Please allow pop-ups to print reports.', 'error'); return; }
+  win.document.write(`<!DOCTYPE html><html><head><title>${esc(title)}</title><meta charset="UTF-8" />
+    <style>
+      * { box-sizing: border-box; }
+      body { font-family: Inter, Arial, sans-serif; color: #111; padding: 2rem; max-width: 900px; margin: 0 auto; }
+      h1 { font-size: 1.5rem; margin: 0 0 .15rem; }
+      h2 { font-size: 1rem; margin-top: 1.75rem; border-bottom: 2px solid #111; padding-bottom: .3rem; }
+      table { width: 100%; border-collapse: collapse; margin-top: .5rem; font-size: .85rem; }
+      th, td { text-align: left; padding: .45rem .6rem; border-bottom: 1px solid #e5e7eb; }
+      th { background: #f9fafb; }
+      .meta { color: #666; margin-bottom: 1rem; font-size: .9rem; }
+      .stats { display: flex; gap: 1rem; flex-wrap: wrap; margin: 1rem 0; }
+      .stat { border: 1px solid #e5e7eb; border-radius: 8px; padding: .6rem 1rem; min-width: 130px; }
+      .stat .label { font-size: .72rem; color: #666; text-transform: uppercase; letter-spacing: .03em; }
+      .stat .value { font-size: 1.25rem; font-weight: 700; }
+      @media print { body { padding: 0; } }
+    </style>
+  </head><body>${bodyHtml}</body></html>`);
+  win.document.close();
+  win.onload = () => win.print();
+  setTimeout(() => { try { win.print(); } catch {} }, 300);
+}
+
+function printClientReport() {
+  if (!lastClientReport) return;
+  const { client, summary } = lastClientReport;
+  const s = summary.stats;
+  const today = new Date().toLocaleDateString('en-KE', { day: 'numeric', month: 'short', year: 'numeric' });
+  const body = `
+    <h1>🚗 Brisa Motors</h1>
+    <p class="meta">Customer Report — generated ${today}</p>
+    <h2>${esc(client.name)}</h2>
+    <p class="meta">${esc(client.email)} ${client.phone ? '&bull; ' + esc(client.phone) : ''} &bull; Client since ${fmtDate(client.created_at)}</p>
+    <div class="stats">
+      <div class="stat"><div class="label">Total Visits</div><div class="value">${s.total_visits}</div></div>
+      <div class="stat"><div class="label">Total Spent</div><div class="value">${fmtKsh(s.total_spent)}</div></div>
+      <div class="stat"><div class="label">Repairs Done</div><div class="value">${s.repairs_done}</div></div>
+      <div class="stat"><div class="label">Invoices</div><div class="value">${s.invoices_count}</div></div>
+    </div>
+    <h2>Appointments</h2>
+    ${!summary.appointments.length ? '<p>No appointments.</p>' : `<table>
+      <thead><tr><th>Date</th><th>Service</th><th>Vehicle</th><th>Status</th></tr></thead>
+      <tbody>${summary.appointments.map(a => `<tr><td>${fmtDate(a.appointment_date)}</td><td>${esc(a.service_type)}</td><td>${a.car_make ? esc(a.car_make + ' ' + (a.car_model||'')) : '—'}</td><td>${esc(a.status)}</td></tr>`).join('')}</tbody>
+    </table>`}
+    <h2>Repairs</h2>
+    ${!summary.repairs.length ? '<p>No repairs.</p>' : `<table>
+      <thead><tr><th>Date</th><th>Plate</th><th>Diagnosis</th><th>Cost</th><th>Payment</th></tr></thead>
+      <tbody>${summary.repairs.map(r => `<tr><td>${fmtDate(r.resolved_at)}</td><td>${esc(r.car_plate||'—')}</td><td>${esc(r.diagnosis||'—')}</td><td>${fmtKsh(r.total_cost)}</td><td>${esc(r.payment_status)}</td></tr>`).join('')}</tbody>
+    </table>`}
+    <h2>Invoices</h2>
+    ${!summary.invoices.length ? '<p>No invoices.</p>' : `<table>
+      <thead><tr><th>Invoice #</th><th>Date</th><th>Amount</th><th>Method</th></tr></thead>
+      <tbody>${summary.invoices.map(inv => `<tr><td>${esc(inv.invoice_number || '#'+inv.id)}</td><td>${fmtDate(inv.issued_at)}</td><td>${fmtKsh(inv.total_amount)}</td><td>${esc(inv.method||'—')}</td></tr>`).join('')}</tbody>
+    </table>`}
+  `;
+  printReport(`Customer Report — ${client.name}`, body);
+}
+
+function printCompanyReport() {
+  if (!adminData) return;
+  const s = adminData.summary;
+  const today = new Date().toLocaleDateString('en-KE', { day: 'numeric', month: 'short', year: 'numeric' });
+  const body = `
+    <h1>🚗 Brisa Motors</h1>
+    <p class="meta">Company Report — generated ${today}</p>
+    <div class="stats">
+      <div class="stat"><div class="label">Clients</div><div class="value">${s.clients_count}</div></div>
+      <div class="stat"><div class="label">Cars Listed</div><div class="value">${s.cars_count}</div></div>
+      <div class="stat"><div class="label">Cars Sold</div><div class="value">${s.cars_sold}</div></div>
+      <div class="stat"><div class="label">Appointments</div><div class="value">${s.appointments_count}</div></div>
+      <div class="stat"><div class="label">Revenue</div><div class="value">${fmtKsh(s.revenue)}</div></div>
+      <div class="stat"><div class="label">Invoices</div><div class="value">${s.invoices_count}</div></div>
+      <div class="stat"><div class="label">Unpaid Repairs</div><div class="value">${s.unpaid_repairs}</div></div>
+      <div class="stat"><div class="label">Paid Repairs</div><div class="value">${s.paid_repairs}</div></div>
+    </div>
+    <h2>Monthly Revenue</h2>
+    ${!s.monthly_revenue.length ? '<p>No revenue yet.</p>' : `<table>
+      <thead><tr><th>Month</th><th>Revenue</th></tr></thead>
+      <tbody>${s.monthly_revenue.map(m => `<tr><td>${esc(m.month)}</td><td>${fmtKsh(m.revenue)}</td></tr>`).join('')}</tbody>
+    </table>`}
+    <h2>Recent Repairs</h2>
+    ${!s.recent_repairs.length ? '<p>No repairs yet.</p>' : `<table>
+      <thead><tr><th>Date</th><th>Client</th><th>Plate</th><th>Cost</th><th>Payment</th></tr></thead>
+      <tbody>${s.recent_repairs.map(r => `<tr><td>${fmtDate(r.resolved_at)}</td><td>${esc(r.client_name||'—')}</td><td>${esc(r.car_plate||'—')}</td><td>${fmtKsh(r.total_cost)}</td><td>${esc(r.payment_status)}</td></tr>`).join('')}</tbody>
+    </table>`}
+    <h2>Recent Invoices</h2>
+    ${!s.recent_invoices.length ? '<p>No invoices yet.</p>' : `<table>
+      <thead><tr><th>Invoice #</th><th>Date</th><th>Amount</th><th>Method</th></tr></thead>
+      <tbody>${s.recent_invoices.map(inv => `<tr><td>${esc(inv.invoice_number || '#'+inv.id)}</td><td>${fmtDate(inv.issued_at)}</td><td>${fmtKsh(inv.total_amount)}</td><td>${esc(inv.method||'—')}</td></tr>`).join('')}</tbody>
+    </table>`}
+    <h2>Inventory Snapshot</h2>
+    <table>
+      <thead><tr><th>Cars in stock</th><th>Parts in stock</th><th>Low-stock parts (≤5)</th></tr></thead>
+      <tbody><tr>
+        <td>${(adminData.cars||[]).reduce((sum,c)=>sum+(c.quantity||0),0)}</td>
+        <td>${(adminData.parts||[]).reduce((sum,p)=>sum+(p.stock||0),0)}</td>
+        <td>${(adminData.parts||[]).filter(p=>p.stock<=5).length}</td>
+      </tr></tbody>
+    </table>
+  `;
+  printReport('Company Report', body);
+}
 
 /* ── Init ────────────────────────────────────────────────────────── */
 showPage('cars');
