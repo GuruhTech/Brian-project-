@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Brisa Motors — Cars, Parts & Service</title>
+  <link rel="stylesheet" href="style.css" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+</head>
+<body>
+
+<!-- ── HEADER ─────────────────────────────────────────────────────── -->
+<header id="header">
+  <div class="container header-inner">
+    <a class="logo" href="#" onclick="showPage('cars')">
+      🚗 <span>Brisa<strong>Motors</strong></span>
+    </a>
+    <nav class="main-nav">
+      <a href="#" class="nav-link active" data-page="cars">Cars</a>
+      <a href="#" class="nav-link" data-page="parts">Parts</a>
+      <a href="#" class="nav-link" data-page="book">Book Service</a>
+      <a href="#" class="nav-link" id="dashNav" data-page="dashboard" style="display:none">My Account</a>
+    </nav>
+    <div class="header-actions">
+      <button class="btn btn-outline" id="loginBtn" onclick="openAuth()">Sign In</button>
+      <div class="user-pill" id="userPill" style="display:none">
+        <span id="userName"></span>
+        <button class="btn btn-ghost btn-sm" onclick="logout()">Sign Out</button>
+      </div>
+    </div>
+    <button class="hamburger" id="hamburger" onclick="toggleMenu()">☰</button>
+  </div>
+  <div class="mobile-menu" id="mobileMenu">
+    <a href="#" onclick="showPage('cars');toggleMenu()">Cars</a>
+    <a href="#" onclick="showPage('parts');toggleMenu()">Parts</a>
+    <a href="#" onclick="showPage('book');toggleMenu()">Book Service</a>
+    <a href="#" id="mDashNav" style="display:none" onclick="showPage('dashboard');toggleMenu()">My Account</a>
+    <a href="#" id="mLoginLink" onclick="openAuth();toggleMenu()">Sign In</a>
+    <a href="#" id="mLogoutLink" style="display:none" onclick="logout();toggleMenu()">Sign Out</a>
+  </div>
+</header>
+
+<!-- ── TOAST ──────────────────────────────────────────────────────── -->
+<div class="toast" id="toast"></div>
+
+<!-- ── AUTH MODAL ─────────────────────────────────────────────────── -->
+<div class="modal-overlay" id="authOverlay" onclick="closeAuth()">
+  <div class="modal" onclick="event.stopPropagation()">
+    <button class="modal-close" onclick="closeAuth()">×</button>
+    <div class="modal-tabs">
+      <button class="modal-tab active" id="loginTabBtn" onclick="switchTab('login')">Sign In</button>
+      <button class="modal-tab" id="registerTabBtn" onclick="switchTab('register')">Create Account</button>
+    </div>
+
+    <form id="loginForm" onsubmit="handleLogin(event)">
+      <h2>Welcome back</h2>
+      <label>Email <input type="email" id="loginEmail" required placeholder="your@email.com" /></label>
+      <label>Password <input type="password" id="loginPassword" required placeholder="••••••••" /></label>
+      <button type="submit" class="btn btn-primary btn-full" id="loginSubmit">Sign In</button>
+      <p class="text-center mt-2"><a href="#" onclick="openForgot()">Forgot password?</a></p>
+    </form>
+
+    <form id="registerForm" style="display:none" onsubmit="handleRegister(event)">
+      <h2>Create your account</h2>
+      <label>Full Name <input type="text" id="regName" required placeholder="John Doe" /></label>
+      <label>Email <input type="email" id="regEmail" required placeholder="your@email.com" /></label>
+      <label>Phone <input type="tel" id="regPhone" placeholder="+254 7XX XXX XXX" /></label>
+      <label>Password <input type="password" id="regPassword" required placeholder="At least 6 characters" minlength="6" /></label>
+      <button type="submit" class="btn btn-primary btn-full" id="regSubmit">Create Account</button>
+    </form>
+  </div>
+</div>
+
+<!-- ── FORGOT PASSWORD MODAL ──────────────────────────────────────── -->
+<div class="modal-overlay" id="forgotOverlay" onclick="closeForgot()">
+  <div class="modal modal-sm" onclick="event.stopPropagation()">
+    <button class="modal-close" onclick="closeForgot()">×</button>
+    <h2>Reset Password</h2>
+    <p style="margin-bottom:1rem;color:#666">Enter your email and we'll send a reset link.</p>
+    <form onsubmit="handleForgot(event)">
+      <label>Email <input type="email" id="forgotEmail" required placeholder="your@email.com" /></label>
+      <button type="submit" class="btn btn-primary btn-full">Send Reset Link</button>
+    </form>
+  </div>
+</div>
+
+<!-- ── PAGES ──────────────────────────────────────────────────────── -->
+<main>
+
+  <!-- CARS PAGE -->
+  <section id="carsPage" class="page active">
+    <div class="page-hero">
+      <div class="container">
+        <h1>Find Your Perfect Car</h1>
+        <p>Browse our quality-checked vehicles. Financing available on request.</p>
+      </div>
+    </div>
+    <div class="container">
+      <div class="filters-bar">
+        <input type="text" id="carSearch" placeholder="Search make or model…" oninput="filterCars()" />
+        <select id="carFuel" onchange="filterCars()">
+          <option value="">All Fuel Types</option>
+          <option>Petrol</option><option>Diesel</option><option>Hybrid</option><option>Electric</option>
+        </select>
+        <select id="carBody" onchange="filterCars()">
+          <option value="">All Body Types</option>
+          <option>Sedan</option><option>SUV</option><option>Hatchback</option><option>Pickup</option><option>Van</option><option>Coupe</option>
+        </select>
+        <input type="number" id="carMaxPrice" placeholder="Max price (Ksh)" oninput="filterCars()" />
+        <button class="btn btn-outline btn-sm" onclick="clearCarFilters()">Clear</button>
+      </div>
+      <div id="carsGrid" class="grid-3">
+        <div class="skeleton-card"></div><div class="skeleton-card"></div><div class="skeleton-card"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- PARTS PAGE -->
+  <section id="partsPage" class="page">
+    <div class="page-hero">
+      <div class="container">
+        <h1>Genuine Spare Parts</h1>
+        <p>Quality parts for all major makes and models, in stock and ready to ship.</p>
+      </div>
+    </div>
+    <div class="container">
+      <div class="filters-bar">
+        <input type="text" id="partSearch" placeholder="Search parts…" oninput="filterParts()" />
+        <select id="partCategory" onchange="filterParts()">
+          <option value="">All Categories</option>
+        </select>
+      </div>
+      <div id="partsGrid" class="grid-4">
+        <div class="skeleton-card"></div><div class="skeleton-card"></div><div class="skeleton-card"></div><div class="skeleton-card"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- BOOK SERVICE PAGE -->
+  <section id="bookPage" class="page">
+    <div class="page-hero">
+      <div class="container">
+        <h1>Book a Service</h1>
+        <p>Schedule your car for inspection, repair, or maintenance with our expert team.</p>
+      </div>
+    </div>
+    <div class="container">
+      <div class="form-card">
+        <form id="bookingForm" onsubmit="handleBooking(event)">
+          <div class="form-grid">
+            <label>Service Type *
+              <select id="bService" required>
+                <option value="">Select service…</option>
+                <option>General Service</option>
+                <option>Engine Repair</option>
+                <option>Brake Service</option>
+                <option>Suspension & Steering</option>
+                <option>Electrical Diagnostics</option>
+                <option>AC Service</option>
+                <option>Tyre & Wheel</option>
+                <option>Pre-purchase Inspection</option>
+                <option>Other</option>
+              </select>
+            </label>
+            <label>Date *
+              <input type="date" id="bDate" required onchange="loadSlots()" min="" />
+            </label>
+            <label>Time Slot *
+              <select id="bSlot" required disabled>
+                <option value="">Pick a date first…</option>
+              </select>
+            </label>
+            <label>Car Make
+              <input type="text" id="bMake" placeholder="e.g. Toyota" />
+            </label>
+            <label>Car Model
+              <input type="text" id="bModel" placeholder="e.g. Corolla" />
+            </label>
+            <label>Year
+              <input type="number" id="bYear" placeholder="2020" min="1990" max="2030" />
+            </label>
+            <label>Number Plate
+              <input type="text" id="bPlate" placeholder="KAA 001A" />
+            </label>
+            <label class="full-width">Notes (optional)
+              <textarea id="bNotes" rows="3" placeholder="Describe the issue or any special instructions…"></textarea>
+            </label>
+          </div>
+          <button type="submit" class="btn btn-primary btn-lg" id="bookSubmit">Book Appointment</button>
+        </form>
+      </div>
+    </div>
+  </section>
+
+  <!-- DASHBOARD PAGE -->
+  <section id="dashboardPage" class="page">
+    <div class="container">
+      <div class="dash-header">
+        <div>
+          <h1 id="dashWelcome">My Account</h1>
+          <p id="dashSubtitle">Here's your activity summary.</p>
+        </div>
+        <button class="btn btn-outline" onclick="showPage('book')">+ Book Service</button>
+      </div>
+
+      <!-- Stats -->
+      <div class="stats-row" id="dashStats"></div>
+
+      <!-- Tabs -->
+      <div class="tabs" id="dashTabs">
+        <button class="tab active" onclick="switchDashTab('appointments', this)">Appointments</button>
+        <button class="tab" onclick="switchDashTab('repairs', this)">Repair History</button>
+        <button class="tab" onclick="switchDashTab('invoices', this)">Invoices</button>
+        <button class="tab" onclick="switchDashTab('profile', this)">Profile</button>
+      </div>
+
+      <div id="dashContent"></div>
+    </div>
+  </section>
+
+</main>
+
+<!-- ── PAYMENT MODAL ───────────────────────────────────────────────── -->
+<div class="modal-overlay" id="payModal" onclick="closePayModal()">
+  <div class="modal modal-sm" onclick="event.stopPropagation()">
+    <button class="modal-close" onclick="closePayModal()">×</button>
+    <div id="payModalContent"></div>
+  </div>
+</div>
+
+<!-- ── QUANTITY MODAL ─────────────────────────────────────────────── -->
+<div class="modal-overlay" id="qtyModal" onclick="document.getElementById('qtyModal').style.display='none'">
+  <div class="modal modal-sm" onclick="event.stopPropagation()">
+    <button class="modal-close" onclick="document.getElementById('qtyModal').style.display='none'">×</button>
+    <div id="qtyModalContent"></div>
+  </div>
+</div>
+
+<footer>
+  <div class="container footer-inner">
+    <span>🚗 Brisa Motors &copy; 2025 &mdash; Nairobi, Kenya</span>
+    <span>📞 +254 700 000 000 &nbsp;|&nbsp; ✉️ info@brisamotors.co.ke</span>
+  </div>
+</footer>
+
+<script src="app.js"></script>
+</body>
+</html>

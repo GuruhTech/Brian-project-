@@ -1,0 +1,528 @@
+'use strict';
+
+/* ── API base URL ────────────────────────────────────────────────── */
+const API = '';   /* Same origin — server.js serves this file */
+
+/* ── State ──────────────────────────────────────────────────────── */
+let token     = localStorage.getItem('bm_token') || null;
+let currentUser = null;
+let allCars   = [];
+let allParts  = [];
+let dashData  = null;
+
+/* ── Utilities ───────────────────────────────────────────────────── */
+function fmtKsh(n) {
+  return 'Ksh ' + Number(n).toLocaleString('en-KE', { minimumFractionDigits: 0 });
+}
+function fmtDate(str) {
+  if (!str) return '—';
+  return new Date(str).toLocaleDateString('en-KE', { day: 'numeric', month: 'short', year: 'numeric' });
+}
+function esc(s) {
+  return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+let toastTimer;
+function toast(msg, type = '') {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.className   = 'toast show ' + type;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove('show'), 3500);
+}
+
+async function apiFetch(path, opts = {}) {
+  const headers = { 'Content-Type': 'application/json', ...(opts.headers || {}) };
+  if (token) headers['Authorization'] = 'Bearer ' + token;
+  const res = await fetch(API + path, { ...opts, headers });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+  return data;
+}
+
+/* ── Navigation ──────────────────────────────────────────────────── */
+function showPage(name) {
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.nav-link').forEach(l => {
+    l.classList.toggle('active', l.dataset.page === name);
+  });
+  document.getElementById(name + 'Page').classList.add('active');
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+
+  if (name === 'dashboard') {
+    if (!token) { openAuth(); return; }
+    loadDashboard();
+  }
+  if (name === 'cars')   loadCars();
+  if (name === 'parts')  loadParts();
+  if (name === 'book')   initBookPage();
+}
+
+document.querySelectorAll('.nav-link').forEach(link => {
+  link.addEventListener('click', e => { e.preventDefault(); showPage(link.dataset.page); });
+});
+
+function toggleMenu() {
+  document.getElementById('mobileMenu').classList.toggle('open');
+}
+
+/* ── Auth ────────────────────────────────────────────────────────── */
+function openAuth()  { document.getElementById('authOverlay').classList.add('open'); }
+function closeAuth() { document.getElementById('authOverlay').classList.remove('open'); }
+function openForgot()  { closeAuth(); document.getElementById('forgotOverlay').classList.add('open'); }
+function closeForgot() { document.getElementById('forgotOverlay').classList.remove('open'); }
+
+function switchTab(t) {
+  document.getElementById('loginForm').style.display    = t === 'login'    ? '' : 'none';
+  document.getElementById('registerForm').style.display = t === 'register' ? '' : 'none';
+  document.getElementById('loginTabBtn').classList.toggle('active', t === 'login');
+  document.getElementById('registerTabBtn').classList.toggle('active', t === 'register');
+}
+
+async function handleLogin(e) {
+  e.preventDefault();
+  const btn = document.getElementById('loginSubmit');
+  btn.disabled = true; btn.textContent = 'Signing in…';
+  try {
+    const data = await apiFetch('/api/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ email: document.getElementById('loginEmail').value, password: document.getElementById('loginPassword').value }),
+    });
+    setUser(data.token, data.user);
+    closeAuth();
+    toast('Welcome back, ' + data.user.name.split(' ')[0] + '!', 'success');
+  } catch (err) { toast(err.message, 'error'); }
+  btn.disabled = false; btn.textContent = 'Sign In';
+}
+
+async function handleRegister(e) {
+  e.preventDefault();
+  const btn = document.getElementById('regSubmit');
+  btn.disabled = true; btn.textContent = 'Creating account…';
+  try {
+    const data = await apiFetch('/api/auth/register', {
+      method: 'POST',
+      body: JSON.stringify({ name: document.getElementById('regName').value, email: document.getElementById('regEmail').value, phone: document.getElementById('regPhone').value, password: document.getElementById('regPassword').value }),
+    });
+    setUser(data.token, data.user);
+    closeAuth();
+    toast('Account created! Welcome, ' + data.user.name.split(' ')[0] + '!', 'success');
+  } catch (err) { toast(err.message, 'error'); }
+  btn.disabled = false; btn.textContent = 'Create Account';
+}
+
+async function handleForgot(e) {
+  e.preventDefault();
+  try {
+    await apiFetch('/api/auth/forgot-password', { method: 'POST', body: JSON.stringify({ email: document.getElementById('forgotEmail').value }) });
+    toast('Reset link sent — check the console for now.', 'success');
+    closeForgot();
+  } catch (err) { toast(err.message, 'error'); }
+}
+
+function setUser(tok, user) {
+  token = tok; currentUser = user;
+  localStorage.setItem('bm_token', tok);
+  document.getElementById('loginBtn').style.display  = 'none';
+  document.getElementById('userPill').style.display  = 'flex';
+  document.getElementById('userName').textContent    = user.name.split(' ')[0];
+  document.getElementById('dashNav').style.display   = '';
+  document.getElementById('mDashNav').style.display  = '';
+  document.getElementById('mLoginLink').style.display = 'none';
+  document.getElementById('mLogoutLink').style.display = '';
+}
+
+function logout() {
+  token = null; currentUser = null; dashData = null;
+  localStorage.removeItem('bm_token');
+  document.getElementById('loginBtn').style.display  = '';
+  document.getElementById('userPill').style.display  = 'none';
+  document.getElementById('dashNav').style.display   = 'none';
+  document.getElementById('mDashNav').style.display  = 'none';
+  document.getElementById('mLoginLink').style.display = '';
+  document.getElementById('mLogoutLink').style.display = 'none';
+  showPage('cars');
+  toast('Signed out.', '');
+}
+
+/* Restore session on load */
+(async function restoreSession() {
+  if (!token) return;
+  try {
+    const data = await apiFetch('/api/dashboard');
+    setUser(token, data.user);
+  } catch { token = null; localStorage.removeItem('bm_token'); }
+})();
+
+/* ── CARS ────────────────────────────────────────────────────────── */
+async function loadCars() {
+  if (allCars.length) return renderCars();
+  try {
+    allCars = await apiFetch('/api/cars');
+    renderCars();
+  } catch { toast('Could not load cars.', 'error'); }
+}
+
+function filterCars() {
+  const q    = (document.getElementById('carSearch').value || '').toLowerCase();
+  const fuel = (document.getElementById('carFuel').value || '').toLowerCase();
+  const body = (document.getElementById('carBody').value || '').toLowerCase();
+  const max  = parseFloat(document.getElementById('carMaxPrice').value) || Infinity;
+  const filtered = allCars.filter(c =>
+    (!q    || (c.make + ' ' + c.model).toLowerCase().includes(q)) &&
+    (!fuel || (c.fuel_type || '').toLowerCase().includes(fuel)) &&
+    (!body || (c.body || '').toLowerCase().includes(body)) &&
+    c.price <= max
+  );
+  renderCars(filtered);
+}
+
+function clearCarFilters() {
+  ['carSearch','carMaxPrice'].forEach(id => document.getElementById(id).value = '');
+  ['carFuel','carBody'].forEach(id => document.getElementById(id).value = '');
+  renderCars();
+}
+
+function renderCars(list) {
+  const cars = list ?? allCars;
+  const grid = document.getElementById('carsGrid');
+  if (!cars.length) {
+    grid.innerHTML = `<div class="empty" style="grid-column:1/-1"><div class="icon">🚗</div><h3>No cars found</h3><p>Try adjusting your filters.</p></div>`;
+    return;
+  }
+  grid.innerHTML = cars.map(c => {
+    const available = c.quantity > 0 && c.status !== 'sold_out';
+    const badge     = available ? `<span class="badge badge-green">Available</span>` : `<span class="badge badge-red">Sold Out</span>`;
+    return `
+    <div class="card">
+      <div class="card-img">🚙</div>
+      <div class="card-body">
+        ${badge}
+        <div class="card-title" style="margin-top:.5rem">${esc(c.make)} ${esc(c.model)}</div>
+        <div class="card-meta">${c.year} &bull; ${esc(c.fuel_type || '')} &bull; ${esc(c.body || '')} &bull; ${esc(c.drive || '')} &bull; ${c.mileage ? c.mileage.toLocaleString() + ' km' : ''}</div>
+        <div class="card-price">${fmtKsh(c.price)}</div>
+        ${available
+          ? `<button class="btn btn-primary btn-full" onclick="openPayModal('car',${c.id},'${esc(c.make+' '+c.model+' '+c.year)}',${c.price},1)">Buy Now</button>`
+          : `<button class="btn btn-full" style="background:#f3f4f6;color:#9ca3af;cursor:default" disabled>Sold Out</button>`}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+/* ── PARTS ───────────────────────────────────────────────────────── */
+async function loadParts() {
+  if (allParts.length) return renderParts();
+  try {
+    allParts = await apiFetch('/api/parts');
+    const cats = [...new Set(allParts.map(p => p.category).filter(Boolean))].sort();
+    const sel  = document.getElementById('partCategory');
+    cats.forEach(c => { const o = document.createElement('option'); o.textContent = c; sel.appendChild(o); });
+    renderParts();
+  } catch { toast('Could not load parts.', 'error'); }
+}
+
+function filterParts() {
+  const q   = (document.getElementById('partSearch').value || '').toLowerCase();
+  const cat = document.getElementById('partCategory').value;
+  renderParts(allParts.filter(p =>
+    (!q   || (p.name + ' ' + (p.description||'')).toLowerCase().includes(q)) &&
+    (!cat || p.category === cat)
+  ));
+}
+
+function renderParts(list) {
+  const parts = list ?? allParts;
+  const grid  = document.getElementById('partsGrid');
+  if (!parts.length) {
+    grid.innerHTML = `<div class="empty" style="grid-column:1/-1"><div class="icon">🔧</div><h3>No parts found</h3><p>Try a different search.</p></div>`;
+    return;
+  }
+  grid.innerHTML = parts.map(p => {
+    const inStock = (p.stock || 0) > 0;
+    return `
+    <div class="card">
+      <div class="card-img" style="height:140px;font-size:2.5rem">🔧</div>
+      <div class="card-body">
+        <span class="badge ${inStock ? 'badge-green' : 'badge-red'}">${inStock ? p.stock + ' in stock' : 'Out of stock'}</span>
+        <div class="card-title" style="margin-top:.5rem">${esc(p.name)}</div>
+        <div class="card-meta">${esc(p.category || '')}${p.part_number ? ' &bull; ' + esc(p.part_number) : ''}</div>
+        <div class="card-price" style="font-size:1.1rem">${fmtKsh(p.price)}</div>
+        ${inStock
+          ? `<button class="btn btn-primary btn-full btn-sm" onclick="openQtyModal(${p.id},'${esc(p.name)}',${p.price},${p.stock})">Order Now</button>`
+          : `<button class="btn btn-full btn-sm" style="background:#f3f4f6;color:#9ca3af;cursor:default" disabled>Out of Stock</button>`}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function openQtyModal(partId, name, price, stock) {
+  if (!token) { openAuth(); return; }
+  const modal = document.getElementById('qtyModal');
+  document.getElementById('qtyModalContent').innerHTML = `
+    <h2 style="font-size:1.15rem;margin-bottom:1rem">Order: ${esc(name)}</h2>
+    <label style="margin-bottom:1rem">Quantity (max ${stock})
+      <input type="number" id="qtyInput" value="1" min="1" max="${stock}" style="margin-top:.35rem" />
+    </label>
+    <div id="qtyTotal" style="font-weight:700;font-size:1.1rem;margin-bottom:1.25rem">Total: ${fmtKsh(price)}</div>
+    <button class="btn btn-primary btn-full" onclick="confirmQty(${partId},'${esc(name)}',${price},${stock})">Continue to Payment</button>
+  `;
+  document.getElementById('qtyInput').oninput = () => {
+    const q = Math.min(parseInt(document.getElementById('qtyInput').value)||1, stock);
+    document.getElementById('qtyTotal').textContent = 'Total: ' + fmtKsh(price * q);
+  };
+  modal.style.display = 'flex';
+}
+
+function confirmQty(partId, name, price, stock) {
+  const qty = Math.min(parseInt(document.getElementById('qtyInput').value)||1, stock);
+  document.getElementById('qtyModal').style.display = 'none';
+  openPayModal('part', partId, name + ' ×' + qty, price * qty, qty);
+}
+
+/* ── PAYMENT MODAL ───────────────────────────────────────────────── */
+function openPayModal(type, refId, desc, amount, qty) {
+  if (!token) { openAuth(); return; }
+  const modal   = document.getElementById('payModal');
+  const content = document.getElementById('payModalContent');
+  content.innerHTML = `
+    <div class="pay-summary">
+      <h2>Complete Purchase</h2>
+      <div class="pay-row"><span>${esc(desc)}</span><span>${fmtKsh(amount)}</span></div>
+      <div class="pay-row"><span>Tax (16% VAT)</span><span>${fmtKsh(amount - amount/1.16)}</span></div>
+      <div class="pay-row"><span><strong>Total</strong></span><span><strong>${fmtKsh(amount)}</strong></span></div>
+    </div>
+    <div class="pay-methods">
+      <p style="font-size:.85rem;color:#6b7280;margin-bottom:.5rem;font-weight:600">CHOOSE PAYMENT METHOD</p>
+      <button class="pay-method-btn" onclick="payWithPaystack('${type}',${refId},${amount},${qty})">
+        <span class="ico">💳</span> Pay with Paystack (Card / Mobile Money)
+      </button>
+      ${type !== 'repair' ? `
+      <button class="pay-method-btn" onclick="payManual('${type}',${refId},'cash',${qty})">
+        <span class="ico">💵</span> Cash Payment (Pay in person)
+      </button>
+      <button class="pay-method-btn" onclick="payManual('${type}',${refId},'bank_transfer',${qty})">
+        <span class="ico">🏦</span> Bank Transfer
+      </button>` : ''}
+    </div>
+  `;
+  modal.classList.add('open');
+}
+
+function closePayModal() { document.getElementById('payModal').classList.remove('open'); }
+
+async function payWithPaystack(payType, refId, amount, qty) {
+  const type_map = { car: 'car_sale', part: 'part_order', repair: 'repair' };
+  try {
+    const data = await apiFetch('/api/payments/paystack/initialize', {
+      method: 'POST',
+      body: JSON.stringify({ payment_type: type_map[payType], reference_id: refId, quantity: qty }),
+    });
+    /* Redirect to Paystack hosted page */
+    window.location.href = data.authorization_url;
+  } catch (err) { toast(err.message, 'error'); }
+}
+
+async function payManual(payType, refId, method, qty) {
+  const endpoint = payType === 'car' ? '/api/payments/car' : payType === 'part' ? '/api/payments/parts' : '/api/payments/repair';
+  const body     = payType === 'car'   ? { car_id: refId, method }
+                 : payType === 'part'  ? { part_id: refId, quantity: qty, method }
+                 : { repair_report_id: refId, method };
+  try {
+    const data = await apiFetch(endpoint, { method: 'POST', body: JSON.stringify(body) });
+    closePayModal();
+    /* Refresh inventory caches */
+    allCars = []; allParts = [];
+    toast('Payment recorded! Invoice #' + (data.invoice?.invoice_number || ''), 'success');
+    if (currentUser) { dashData = null; }
+  } catch (err) { toast(err.message, 'error'); }
+}
+
+/* Check for Paystack callback (reference in URL) */
+(async function checkPaystackReturn() {
+  const params = new URLSearchParams(location.search);
+  const ref    = params.get('reference') || params.get('trxref');
+  if (!ref || !token) return;
+  history.replaceState({}, '', location.pathname);
+  try {
+    const data = await apiFetch('/api/payments/paystack/verify/' + ref);
+    if (data.status === 'completed') {
+      allCars = []; allParts = []; dashData = null;
+      toast('Payment successful! Invoice #' + (data.invoice?.invoice_number || ''), 'success');
+    } else {
+      toast('Payment status: ' + data.status + '. Please try again or contact us.', 'error');
+    }
+  } catch (err) { toast('Could not verify payment: ' + err.message, 'error'); }
+})();
+
+/* ── BOOKING ─────────────────────────────────────────────────────── */
+function initBookPage() {
+  const dateInput = document.getElementById('bDate');
+  const today     = new Date().toISOString().slice(0, 10);
+  dateInput.min   = today;
+}
+
+async function loadSlots() {
+  const date = document.getElementById('bDate').value;
+  if (!date) return;
+  const sel = document.getElementById('bSlot');
+  sel.disabled = true; sel.innerHTML = '<option>Loading…</option>';
+  try {
+    const slots = await apiFetch('/api/appointments/slots?date=' + date);
+    sel.innerHTML = '<option value="">Select a time…</option>' + slots.map(s =>
+      `<option value="${s.slot}" ${s.available ? '' : 'disabled'}>${s.slot}${s.available ? '' : ' (booked)'}</option>`
+    ).join('');
+    sel.disabled = false;
+  } catch { sel.innerHTML = '<option>Error loading slots</option>'; }
+}
+
+async function handleBooking(e) {
+  e.preventDefault();
+  if (!token) { openAuth(); return; }
+  const btn = document.getElementById('bookSubmit');
+  btn.disabled = true; btn.textContent = 'Booking…';
+  try {
+    const body = {
+      appointment_date: document.getElementById('bDate').value,
+      time_slot:        document.getElementById('bSlot').value,
+      service_type:     document.getElementById('bService').value,
+      car_make:         document.getElementById('bMake').value,
+      car_model:        document.getElementById('bModel').value,
+      car_year:         document.getElementById('bYear').value,
+      car_plate:        document.getElementById('bPlate').value,
+      notes:            document.getElementById('bNotes').value,
+    };
+    const data = await apiFetch('/api/appointments', { method: 'POST', body: JSON.stringify(body) });
+    toast('Appointment booked! We\'ll see you then.', 'success');
+    document.getElementById('bookingForm').reset();
+    document.getElementById('bSlot').innerHTML = '<option value="">Pick a date first…</option>';
+    document.getElementById('bSlot').disabled = true;
+    dashData = null;
+    if (data.prior_visits > 0) toast(`Welcome back! You've had ${data.prior_visits} previous visit(s) with us.`, '');
+  } catch (err) { toast(err.message, 'error'); }
+  btn.disabled = false; btn.textContent = 'Book Appointment';
+}
+
+/* ── DASHBOARD ───────────────────────────────────────────────────── */
+async function loadDashboard() {
+  if (!token) return;
+  try {
+    const data   = await apiFetch('/api/dashboard');
+    dashData     = data;
+    currentUser  = data.user;
+    const s      = data.summary.stats;
+    document.getElementById('dashWelcome').textContent  = 'Welcome, ' + data.user.name.split(' ')[0];
+    document.getElementById('dashSubtitle').textContent = 'Here\'s your activity at Brisa Motors.';
+    document.getElementById('dashStats').innerHTML = `
+      <div class="stat-card"><div class="label">Total Visits</div><div class="value">${s.total_visits}</div></div>
+      <div class="stat-card"><div class="label">Upcoming</div><div class="value">${s.upcoming_appts}</div><div class="sub">appointments</div></div>
+      <div class="stat-card"><div class="label">Total Spent</div><div class="value">${fmtKsh(s.total_spent)}</div></div>
+      <div class="stat-card"><div class="label">Invoices</div><div class="value">${s.invoices_count}</div></div>
+    `;
+    switchDashTab('appointments', document.querySelector('.tab.active'));
+  } catch (err) { toast(err.message, 'error'); }
+}
+
+function switchDashTab(tab, btn) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  if (btn) btn.classList.add('active');
+  if (!dashData) return;
+  const el = document.getElementById('dashContent');
+  const s  = dashData.summary;
+
+  if (tab === 'appointments') {
+    if (!s.appointments.length) { el.innerHTML = empty('📅','No appointments yet','Book your first service above.'); return; }
+    el.innerHTML = `<div class="table-wrap"><table>
+      <thead><tr><th>Date</th><th>Time</th><th>Service</th><th>Vehicle</th><th>Status</th><th>Diagnosis</th></tr></thead>
+      <tbody>${s.appointments.map(a => `<tr>
+        <td>${fmtDate(a.appointment_date)}</td>
+        <td>${a.time_slot || '—'}</td>
+        <td>${esc(a.service_type)}</td>
+        <td>${a.car_make ? esc(a.car_make + ' ' + (a.car_model||'')) : '—'}</td>
+        <td><span class="badge ${a.status==='scheduled'?'badge-amber':a.status==='completed'?'badge-green':'badge-gray'}">${a.status}</span></td>
+        <td>${a.diagnosis ? esc(a.diagnosis.substring(0,40)) + '…' : '—'}</td>
+      </tr>`).join('')}</tbody>
+    </table></div>`;
+  }
+
+  if (tab === 'repairs') {
+    if (!s.repairs.length) { el.innerHTML = empty('🔧','No repair history','Your repair records will appear here.'); return; }
+    el.innerHTML = `<div class="table-wrap"><table>
+      <thead><tr><th>Date</th><th>Plate</th><th>Diagnosis</th><th>Cost</th><th>Payment</th></tr></thead>
+      <tbody>${s.repairs.map(r => `<tr>
+        <td>${fmtDate(r.resolved_at)}</td>
+        <td>${esc(r.car_plate || '—')}</td>
+        <td>${esc((r.diagnosis||'').substring(0,50))}</td>
+        <td>${fmtKsh(r.total_cost)}</td>
+        <td>
+          <span class="badge ${r.payment_status==='paid'?'badge-green':'badge-red'}">${r.payment_status}</span>
+          ${r.payment_status !== 'paid' ? `<button class="btn btn-sm btn-primary" style="margin-left:.5rem" onclick="openPayModal('repair',${r.id},'Repair — ${esc(r.diagnosis||'').replace(/'/g,'')}',${r.total_cost},1)">Pay Now</button>` : ''}
+        </td>
+      </tr>`).join('')}</tbody>
+    </table></div>`;
+  }
+
+  if (tab === 'invoices') {
+    if (!s.invoices.length) { el.innerHTML = empty('🧾','No invoices yet','Invoices are generated after payment.'); return; }
+    el.innerHTML = `<div class="table-wrap"><table>
+      <thead><tr><th>Invoice #</th><th>Date</th><th>Type</th><th>Amount</th><th>Method</th><th>Ref</th></tr></thead>
+      <tbody>${s.invoices.map(inv => `<tr>
+        <td><strong>${esc(inv.invoice_number || '#' + inv.id)}</strong></td>
+        <td>${fmtDate(inv.issued_at)}</td>
+        <td>${esc(inv.invoice_type?.replace('_',' ') || '—')}</td>
+        <td>${fmtKsh(inv.total_amount)}</td>
+        <td>${esc(inv.method || '—')}</td>
+        <td style="font-size:.78rem;color:#6b7280">${esc(inv.paystack_ref || '—')}</td>
+      </tr>`).join('')}</tbody>
+    </table></div>`;
+  }
+
+  if (tab === 'profile') {
+    el.innerHTML = `
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:1.5rem;max-width:780px">
+        <div class="profile-card">
+          <h3>Personal Details</h3>
+          <form onsubmit="saveProfile(event)">
+            <label>Full Name <input id="pName" value="${esc(currentUser.name)}" required /></label>
+            <label>Phone <input id="pPhone" value="${esc(currentUser.phone||'')}" /></label>
+            <label>Email <input value="${esc(currentUser.email)}" disabled style="background:#f9fafb;color:#6b7280" /></label>
+            <button type="submit" class="btn btn-primary">Save Changes</button>
+          </form>
+        </div>
+        <div class="profile-card">
+          <h3>Change Password</h3>
+          <form onsubmit="changePassword(event)">
+            <label>Current Password <input type="password" id="cpCurrent" required /></label>
+            <label>New Password <input type="password" id="cpNew" required minlength="6" /></label>
+            <button type="submit" class="btn btn-primary">Update Password</button>
+          </form>
+        </div>
+      </div>`;
+  }
+}
+
+function empty(icon, title, sub) {
+  return `<div class="empty"><div class="icon">${icon}</div><h3>${title}</h3><p>${sub}</p></div>`;
+}
+
+async function saveProfile(e) {
+  e.preventDefault();
+  try {
+    await apiFetch('/api/dashboard/profile', { method: 'PUT', body: JSON.stringify({ name: document.getElementById('pName').value, phone: document.getElementById('pPhone').value }) });
+    toast('Profile saved!', 'success');
+    dashData = null;
+    loadDashboard();
+  } catch (err) { toast(err.message, 'error'); }
+}
+
+async function changePassword(e) {
+  e.preventDefault();
+  try {
+    await apiFetch('/api/dashboard/change-password', { method: 'PUT', body: JSON.stringify({ current_password: document.getElementById('cpCurrent').value, new_password: document.getElementById('cpNew').value }) });
+    toast('Password updated!', 'success');
+    document.getElementById('cpCurrent').value = '';
+    document.getElementById('cpNew').value = '';
+  } catch (err) { toast(err.message, 'error'); }
+}
+
+/* ── Init ────────────────────────────────────────────────────────── */
+showPage('cars');
