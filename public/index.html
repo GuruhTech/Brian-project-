@@ -21,6 +21,7 @@
       <a href="#" class="nav-link" data-page="parts">Parts</a>
       <a href="#" class="nav-link" data-page="book">Book Service</a>
       <a href="#" class="nav-link" id="dashNav" data-page="dashboard" style="display:none">My Account</a>
+      <a href="#" class="nav-link" id="adminNav" data-page="admin" style="display:none">Admin</a>
     </nav>
     <div class="header-actions">
       <button class="btn btn-outline" id="loginBtn" onclick="openAuth()">Sign In</button>
@@ -36,6 +37,7 @@
     <a href="#" onclick="showPage('parts');toggleMenu()">Parts</a>
     <a href="#" onclick="showPage('book');toggleMenu()">Book Service</a>
     <a href="#" id="mDashNav" style="display:none" onclick="showPage('dashboard');toggleMenu()">My Account</a>
+    <a href="#" id="mAdminNav" style="display:none" onclick="showPage('admin');toggleMenu()">Admin</a>
     <a href="#" id="mLoginLink" onclick="openAuth();toggleMenu()">Sign In</a>
     <a href="#" id="mLogoutLink" style="display:none" onclick="logout();toggleMenu()">Sign Out</a>
   </div>
@@ -219,7 +221,40 @@
     </div>
   </section>
 
+  <!-- ADMIN PAGE -->
+  <section id="adminPage" class="page">
+    <div class="container">
+      <div class="dash-header">
+        <div>
+          <h1>Admin Dashboard</h1>
+          <p>Business overview, clients, repairs &amp; invoices.</p>
+        </div>
+      </div>
+
+      <!-- Stats -->
+      <div class="stats-row" id="adminStats"></div>
+
+      <!-- Tabs -->
+      <div class="tabs" id="adminTabs">
+        <button class="tab active" onclick="switchAdminTab('overview', this)">Overview</button>
+        <button class="tab" onclick="switchAdminTab('clients', this)">Clients</button>
+        <button class="tab" onclick="switchAdminTab('repairs', this)">Recent Repairs</button>
+        <button class="tab" onclick="switchAdminTab('invoices', this)">Recent Invoices</button>
+      </div>
+
+      <div id="adminContent"></div>
+    </div>
+  </section>
+
 </main>
+
+<!-- ── ADMIN CLIENT DETAIL MODAL ───────────────────────────────────── -->
+<div class="modal-overlay" id="clientModal" onclick="closeClientModal()">
+  <div class="modal" onclick="event.stopPropagation()">
+    <button class="modal-close" onclick="closeClientModal()">×</button>
+    <div id="clientModalContent">Loading…</div>
+  </div>
+</div>
 
 <!-- ── PAYMENT MODAL ───────────────────────────────────────────────── -->
 <div class="modal-overlay" id="payModal" onclick="closePayModal()">
