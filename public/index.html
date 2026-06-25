@@ -229,6 +229,7 @@
           <h1>Admin Dashboard</h1>
           <p>Business overview, clients, repairs &amp; invoices.</p>
         </div>
+        <button class="btn btn-outline dark" onclick="printCompanyReport()">🖨️ Print Company Report</button>
       </div>
 
       <!-- Stats -->
@@ -240,6 +241,7 @@
         <button class="tab" onclick="switchAdminTab('clients', this)">Clients</button>
         <button class="tab" onclick="switchAdminTab('repairs', this)">Recent Repairs</button>
         <button class="tab" onclick="switchAdminTab('invoices', this)">Recent Invoices</button>
+        <button class="tab" onclick="switchAdminTab('inventory', this)">Inventory</button>
       </div>
 
       <div id="adminContent"></div>
@@ -253,6 +255,14 @@
   <div class="modal" onclick="event.stopPropagation()">
     <button class="modal-close" onclick="closeClientModal()">×</button>
     <div id="clientModalContent">Loading…</div>
+  </div>
+</div>
+
+<!-- ── ADMIN STOCK ADD/EDIT MODAL ──────────────────────────────────── -->
+<div class="modal-overlay" id="stockModal" onclick="closeStockModal()">
+  <div class="modal" onclick="event.stopPropagation()">
+    <button class="modal-close" onclick="closeStockModal()">×</button>
+    <div id="stockModalContent"></div>
   </div>
 </div>
 
