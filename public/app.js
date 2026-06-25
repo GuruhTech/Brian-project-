@@ -3,6 +3,33 @@
 /* ── API base URL ────────────────────────────────────────────────── */
 const API = '';   /* Same origin — server.js serves this file */
 
+/* ── Part image map (part name lowercase → image URL) ───────────── */
+const PART_IMAGES = {
+  'oil filter':              'https://us.123rf.com/450wm/nikkytok/nikkytok1704/nikkytok170400114/76985580-oil-filter-part-for-car-white-background.jpg',
+  'brake pads (front)':      'https://thumbs.dreamstime.com/b/car-brake-pads-isolated-white-background-68720101.jpg',
+  'brake pads':              'https://thumbs.dreamstime.com/b/car-brake-pads-isolated-white-background-68720101.jpg',
+  'air filter':              'https://static.vecteezy.com/system/resources/thumbnails/010/220/912/small/square-car-air-filter-on-a-white-background-photo.jpg',
+  'alternator belt':         'https://www.jalopnik.com/img/gallery/should-you-replace-your-cars-serpentine-belt-when-replacing-the-alternator/intro-1765207174.jpg',
+  'shock absorber (front)':  'https://static.vecteezy.com/system/resources/thumbnails/050/752/477/small/pair-of-shock-absorbers-isolated-on-white-background-photo.jpg',
+  'shock absorber':          'https://static.vecteezy.com/system/resources/thumbnails/050/752/477/small/pair-of-shock-absorbers-isolated-on-white-background-photo.jpg',
+  'radiator':                'https://i5.walmartimages.com/seo/ECCPP-Auto-Parts-Plastic-Aluminum-Replacement-Radiator-for-2007-2008-2009-2010-2011-for-Nissan-Versa-hatchback-SL-CU2981_95add1ef-1b1d-4845-8e39-2ea4ff871e17.d09466c1d35174ea459b6477243648c2.jpeg?odnHeight=576&odnWidth=576&odnBg=FFFFFF',
+};
+
+/* ── Part category fallback images ──────────────────────────────── */
+const PART_CATEGORY_IMAGES = {
+  'engine':     'https://static.vecteezy.com/system/resources/thumbnails/006/196/306/small/detailed-car-engine-and-other-parts-video.jpg',
+  'brakes':     'https://thumbs.dreamstime.com/b/auto-parts-white-background-brake-pads-filter-bearing-33128160.jpg',
+  'electrical': 'https://fargoautoelectricals.com/blog/wp-content/uploads/2023/01/spare-parts-online-300x157.png',
+  'suspension': 'https://proleantech.com/wp-content/uploads/2025/01/Car-Suspension-Parts-1024x576.webp',
+  'cooling':    'https://littlewolfauto.com/wp-content/uploads/2022/09/little-wolf-waupaca-sept-22-blog-radiator-cooling-system-parts.webp',
+};
+
+function getPartImage(name, category) {
+  const key = (name || '').toLowerCase();
+  const cat = (category || '').toLowerCase();
+  return PART_IMAGES[key] || PART_CATEGORY_IMAGES[cat] || null;
+}
+
 /* ── Car image map (make + model → image URL) ───────────────────── */
 const CAR_IMAGES = {
   'toyota corolla':      'https://w0.peakpx.com/wallpaper/951/766/HD-wallpaper-toyota-corolla-2020-side-view-new-silver-corolla-exterior-sedan-japanese-cars-toyota-thumbnail.jpg',
@@ -264,9 +291,13 @@ function renderParts(list) {
   }
   grid.innerHTML = parts.map(p => {
     const inStock = (p.stock || 0) > 0;
+    const imgUrl  = getPartImage(p.name, p.category);
+    const imgHtml = imgUrl
+      ? `<img src="${imgUrl}" alt="${esc(p.name)}" loading="lazy" style="width:100%;height:100%;object-fit:cover" onerror="this.parentElement.innerHTML='<span style=\\'font-size:2.5rem\\'>🔧</span>'" />`
+      : `<span style="font-size:2.5rem">🔧</span>`;
     return `
     <div class="card">
-      <div class="card-img" style="height:140px;font-size:2.5rem">🔧</div>
+      <div class="card-img" style="height:160px;overflow:hidden;display:flex;align-items:center;justify-content:center;background:#f8f8f8">${imgHtml}</div>
       <div class="card-body">
         <span class="badge ${inStock ? 'badge-green' : 'badge-red'}">${inStock ? p.stock + ' in stock' : 'Out of stock'}</span>
         <div class="card-title" style="margin-top:.5rem">${esc(p.name)}</div>
