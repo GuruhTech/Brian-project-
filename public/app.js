@@ -57,6 +57,7 @@ let currentUser = null;
 let allCars   = [];
 let allParts  = [];
 let dashData  = null;
+let adminData = null;
 
 /* ── Utilities ───────────────────────────────────────────────────── */
 function fmtKsh(n) {
@@ -100,6 +101,10 @@ function showPage(name) {
   if (name === 'dashboard') {
     if (!token) { openAuth(); return; }
     loadDashboard();
+  }
+  if (name === 'admin') {
+    if (!token || !currentUser || currentUser.role !== 'admin') { toast('Admin access only.', 'error'); showPage('cars'); return; }
+    loadAdmin();
   }
   if (name === 'cars')   loadCars();
   if (name === 'parts')  loadParts();
@@ -178,15 +183,20 @@ function setUser(tok, user) {
   document.getElementById('mDashNav').style.display  = '';
   document.getElementById('mLoginLink').style.display = 'none';
   document.getElementById('mLogoutLink').style.display = '';
+  const isAdmin = user.role === 'admin';
+  document.getElementById('adminNav').style.display  = isAdmin ? '' : 'none';
+  document.getElementById('mAdminNav').style.display = isAdmin ? '' : 'none';
 }
 
 function logout() {
-  token = null; currentUser = null; dashData = null;
+  token = null; currentUser = null; dashData = null; adminData = null;
   localStorage.removeItem('bm_token');
   document.getElementById('loginBtn').style.display  = '';
   document.getElementById('userPill').style.display  = 'none';
   document.getElementById('dashNav').style.display   = 'none';
   document.getElementById('mDashNav').style.display  = 'none';
+  document.getElementById('adminNav').style.display  = 'none';
+  document.getElementById('mAdminNav').style.display = 'none';
   document.getElementById('mLoginLink').style.display = '';
   document.getElementById('mLogoutLink').style.display = 'none';
   showPage('cars');
@@ -579,6 +589,148 @@ async function changePassword(e) {
     document.getElementById('cpNew').value = '';
   } catch (err) { toast(err.message, 'error'); }
 }
+
+/* ── ADMIN ───────────────────────────────────────────────────────── */
+async function loadAdmin() {
+  if (!token) return;
+  try {
+    const [summary, clients] = await Promise.all([
+      apiFetch('/api/admin/reports/summary'),
+      apiFetch('/api/admin/clients'),
+    ]);
+    adminData = { summary, clients };
+    document.getElementById('adminStats').innerHTML = `
+      <div class="stat-card"><div class="label">Clients</div><div class="value">${summary.clients_count}</div></div>
+      <div class="stat-card"><div class="label">Cars Listed</div><div class="value">${summary.cars_count}</div><div class="sub">${summary.cars_sold} sold</div></div>
+      <div class="stat-card"><div class="label">Appointments</div><div class="value">${summary.appointments_count}</div></div>
+      <div class="stat-card"><div class="label">Revenue</div><div class="value">${fmtKsh(summary.revenue)}</div></div>
+      <div class="stat-card"><div class="label">Invoices</div><div class="value">${summary.invoices_count}</div></div>
+      <div class="stat-card"><div class="label">Unpaid Repairs</div><div class="value">${summary.unpaid_repairs}</div><div class="sub">${summary.paid_repairs} paid</div></div>
+    `;
+    const tabs = [...document.querySelectorAll('#adminTabs .tab')];
+    const activeBtn = tabs.find(t => t.classList.contains('active')) || tabs[0];
+    const tabNames = ['overview', 'clients', 'repairs', 'invoices'];
+    const tabName = tabNames[tabs.indexOf(activeBtn)] || 'overview';
+    switchAdminTab(tabName, activeBtn);
+  } catch (err) { toast(err.message, 'error'); }
+}
+
+function switchAdminTab(tab, btn) {
+  document.querySelectorAll('#adminTabs .tab').forEach(t => t.classList.remove('active'));
+  if (btn) btn.classList.add('active');
+  if (!adminData) return;
+  const el = document.getElementById('adminContent');
+  const s  = adminData.summary;
+
+  if (tab === 'overview') {
+    if (!s.monthly_revenue.length) { el.innerHTML = empty('📊', 'No revenue yet', 'Monthly revenue will show up here once payments come in.'); return; }
+    el.innerHTML = `<div class="table-wrap"><table>
+      <thead><tr><th>Month</th><th>Revenue</th></tr></thead>
+      <tbody>${s.monthly_revenue.map(m => `<tr><td>${esc(m.month)}</td><td>${fmtKsh(m.revenue)}</td></tr>`).join('')}</tbody>
+    </table></div>`;
+  }
+
+  if (tab === 'clients') {
+    const clients = adminData.clients.filter(c => c.role === 'client');
+    if (!clients.length) { el.innerHTML = empty('👤', 'No clients yet', 'Registered clients will appear here.'); return; }
+    el.innerHTML = `<div class="table-wrap"><table>
+      <thead><tr><th>Name</th><th>Email</th><th>Phone</th><th>Joined</th><th></th></tr></thead>
+      <tbody>${clients.map(c => `<tr>
+        <td>${esc(c.name)}</td>
+        <td>${esc(c.email)}</td>
+        <td>${esc(c.phone || '—')}</td>
+        <td>${fmtDate(c.created_at)}</td>
+        <td><button class="btn btn-sm btn-outline" onclick="viewClient(${c.id})">View</button></td>
+      </tr>`).join('')}</tbody>
+    </table></div>`;
+  }
+
+  if (tab === 'repairs') {
+    if (!s.recent_repairs.length) { el.innerHTML = empty('🔧', 'No repairs yet', 'Recent repair records will appear here.'); return; }
+    el.innerHTML = `<div class="table-wrap"><table>
+      <thead><tr><th>Date</th><th>Client</th><th>Plate</th><th>Diagnosis</th><th>Cost</th><th>Payment</th></tr></thead>
+      <tbody>${s.recent_repairs.map(r => `<tr>
+        <td>${fmtDate(r.resolved_at)}</td>
+        <td>${esc(r.client_name || '—')}<br><span style="font-size:.78rem;color:#6b7280">${esc(r.client_email || '')}</span></td>
+        <td>${esc(r.car_plate || '—')}</td>
+        <td>${esc((r.diagnosis || '').substring(0, 50))}</td>
+        <td>${fmtKsh(r.total_cost)}</td>
+        <td><span class="badge ${r.payment_status === 'paid' ? 'badge-green' : 'badge-red'}">${r.payment_status}</span></td>
+      </tr>`).join('')}</tbody>
+    </table></div>`;
+  }
+
+  if (tab === 'invoices') {
+    if (!s.recent_invoices.length) { el.innerHTML = empty('🧾', 'No invoices yet', 'Recent invoices will appear here.'); return; }
+    el.innerHTML = `<div class="table-wrap"><table>
+      <thead><tr><th>Invoice #</th><th>Date</th><th>Type</th><th>Amount</th><th>Method</th><th>Ref</th></tr></thead>
+      <tbody>${s.recent_invoices.map(inv => `<tr>
+        <td><strong>${esc(inv.invoice_number || '#' + inv.id)}</strong></td>
+        <td>${fmtDate(inv.issued_at)}</td>
+        <td>${esc((inv.invoice_type || '').replace('_', ' ') || '—')}</td>
+        <td>${fmtKsh(inv.total_amount)}</td>
+        <td>${esc(inv.method || '—')}</td>
+        <td style="font-size:.78rem;color:#6b7280">${esc(inv.paystack_ref || '—')}</td>
+      </tr>`).join('')}</tbody>
+    </table></div>`;
+  }
+}
+
+async function viewClient(id) {
+  const modal = document.getElementById('clientModal');
+  const content = document.getElementById('clientModalContent');
+  content.innerHTML = 'Loading…';
+  modal.classList.add('open');
+  try {
+    const { client, summary } = await apiFetch('/api/admin/clients/' + id);
+    const s = summary.stats;
+    content.innerHTML = `
+      <h2>${esc(client.name)}</h2>
+      <p style="color:#6b7280;margin-top:-.5rem">${esc(client.email)} ${client.phone ? '&bull; ' + esc(client.phone) : ''} &bull; Joined ${fmtDate(client.created_at)}</p>
+      <div class="stats-row" style="margin:1rem 0">
+        <div class="stat-card"><div class="label">Total Visits</div><div class="value">${s.total_visits}</div></div>
+        <div class="stat-card"><div class="label">Total Spent</div><div class="value">${fmtKsh(s.total_spent)}</div></div>
+        <div class="stat-card"><div class="label">Repairs Done</div><div class="value">${s.repairs_done}</div></div>
+        <div class="stat-card"><div class="label">Invoices</div><div class="value">${s.invoices_count}</div></div>
+      </div>
+      <h3>Appointments</h3>
+      ${!summary.appointments.length ? `<p style="color:#6b7280">No appointments.</p>` : `<div class="table-wrap"><table>
+        <thead><tr><th>Date</th><th>Service</th><th>Vehicle</th><th>Status</th></tr></thead>
+        <tbody>${summary.appointments.map(a => `<tr>
+          <td>${fmtDate(a.appointment_date)}</td>
+          <td>${esc(a.service_type)}</td>
+          <td>${a.car_make ? esc(a.car_make + ' ' + (a.car_model || '')) : '—'}</td>
+          <td><span class="badge ${a.status === 'scheduled' ? 'badge-amber' : a.status === 'completed' ? 'badge-green' : 'badge-gray'}">${a.status}</span></td>
+        </tr>`).join('')}</tbody>
+      </table></div>`}
+      <h3 style="margin-top:1.5rem">Repairs</h3>
+      ${!summary.repairs.length ? `<p style="color:#6b7280">No repairs.</p>` : `<div class="table-wrap"><table>
+        <thead><tr><th>Date</th><th>Plate</th><th>Diagnosis</th><th>Cost</th><th>Payment</th></tr></thead>
+        <tbody>${summary.repairs.map(r => `<tr>
+          <td>${fmtDate(r.resolved_at)}</td>
+          <td>${esc(r.car_plate || '—')}</td>
+          <td>${esc((r.diagnosis || '').substring(0, 50))}</td>
+          <td>${fmtKsh(r.total_cost)}</td>
+          <td><span class="badge ${r.payment_status === 'paid' ? 'badge-green' : 'badge-red'}">${r.payment_status}</span></td>
+        </tr>`).join('')}</tbody>
+      </table></div>`}
+      <h3 style="margin-top:1.5rem">Invoices</h3>
+      ${!summary.invoices.length ? `<p style="color:#6b7280">No invoices.</p>` : `<div class="table-wrap"><table>
+        <thead><tr><th>Invoice #</th><th>Date</th><th>Amount</th><th>Method</th></tr></thead>
+        <tbody>${summary.invoices.map(inv => `<tr>
+          <td><strong>${esc(inv.invoice_number || '#' + inv.id)}</strong></td>
+          <td>${fmtDate(inv.issued_at)}</td>
+          <td>${fmtKsh(inv.total_amount)}</td>
+          <td>${esc(inv.method || '—')}</td>
+        </tr>`).join('')}</tbody>
+      </table></div>`}
+    `;
+  } catch (err) {
+    content.innerHTML = `<p style="color:#dc2626">${esc(err.message)}</p>`;
+  }
+}
+
+function closeClientModal() { document.getElementById('clientModal').classList.remove('open'); }
 
 /* ── Init ────────────────────────────────────────────────────────── */
 showPage('cars');
