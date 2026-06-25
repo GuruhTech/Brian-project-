@@ -682,6 +682,86 @@ app.get('/api/admin/clients/:id', auth, adminOnly, go(async (req, res) => {
   res.json({ client, summary });
 }));
 
+/* Admin: Inventory — Cars */
+app.post('/api/admin/cars', auth, adminOnly, go(async (req, res) => {
+  const b = req.body || {};
+  if (!b.make?.trim() || !b.model?.trim()) return res.status(400).json({ error: 'Make and model are required.' });
+  const result = await supabase.from('cars').insert({
+    make: b.make.trim(), model: b.model.trim(),
+    year: b.year ? Number(b.year) : null,
+    price: b.price ? Number(b.price) : 0,
+    mileage: b.mileage ? Number(b.mileage) : null,
+    color: b.color || null,
+    engine: b.engine || null,
+    hp: b.hp ? Number(b.hp) : null,
+    turbo: !!b.turbo,
+    drive: b.drive || null,
+    body: b.body || null,
+    transmission: b.transmission || null,
+    fuel_type: b.fuel_type || null,
+    seats: b.seats ? Number(b.seats) : null,
+    doors: b.doors ? Number(b.doors) : null,
+    cylinders: b.cylinders ? Number(b.cylinders) : null,
+    description: b.description || null,
+    quantity: b.quantity != null ? Number(b.quantity) : 1,
+    status: b.status || ((b.quantity != null ? Number(b.quantity) : 1) > 0 ? 'available' : 'sold_out'),
+  }).select().single();
+  if (result.error) throw new Error(result.error.message);
+  res.status(201).json(result.data);
+}));
+
+app.put('/api/admin/cars/:id', auth, adminOnly, go(async (req, res) => {
+  const b = req.body || {};
+  const numeric = ['year', 'price', 'mileage', 'hp', 'seats', 'doors', 'cylinders', 'quantity'];
+  const allowed = ['make', 'model', 'year', 'price', 'mileage', 'color', 'engine', 'hp', 'turbo', 'drive', 'body', 'transmission', 'fuel_type', 'seats', 'doors', 'cylinders', 'description', 'quantity', 'status'];
+  const updates = {};
+  allowed.forEach(k => { if (b[k] !== undefined) updates[k] = numeric.includes(k) ? Number(b[k]) : b[k]; });
+  if (updates.quantity != null && b.status === undefined) updates.status = updates.quantity > 0 ? 'available' : 'sold_out';
+  const result = await supabase.from('cars').update(updates).eq('id', req.params.id).select().single();
+  if (result.error) throw new Error(result.error.message);
+  res.json(result.data);
+}));
+
+app.delete('/api/admin/cars/:id', auth, adminOnly, go(async (req, res) => {
+  const result = await supabase.from('cars').delete().eq('id', req.params.id);
+  if (result.error) throw new Error(result.error.message);
+  res.json({ success: true });
+}));
+
+/* Admin: Inventory — Parts */
+app.post('/api/admin/parts', auth, adminOnly, go(async (req, res) => {
+  const b = req.body || {};
+  if (!b.name?.trim()) return res.status(400).json({ error: 'Part name is required.' });
+  const result = await supabase.from('parts').insert({
+    name: b.name.trim(),
+    part_number: b.part_number || null,
+    category: b.category || null,
+    price: b.price ? Number(b.price) : 0,
+    stock: b.stock != null ? Number(b.stock) : 0,
+    compatible_makes: b.compatible_makes || null,
+    description: b.description || null,
+  }).select().single();
+  if (result.error) throw new Error(result.error.message);
+  res.status(201).json(result.data);
+}));
+
+app.put('/api/admin/parts/:id', auth, adminOnly, go(async (req, res) => {
+  const b = req.body || {};
+  const numeric = ['price', 'stock'];
+  const allowed = ['name', 'part_number', 'category', 'price', 'stock', 'compatible_makes', 'description'];
+  const updates = {};
+  allowed.forEach(k => { if (b[k] !== undefined) updates[k] = numeric.includes(k) ? Number(b[k]) : b[k]; });
+  const result = await supabase.from('parts').update(updates).eq('id', req.params.id).select().single();
+  if (result.error) throw new Error(result.error.message);
+  res.json(result.data);
+}));
+
+app.delete('/api/admin/parts/:id', auth, adminOnly, go(async (req, res) => {
+  const result = await supabase.from('parts').delete().eq('id', req.params.id);
+  if (result.error) throw new Error(result.error.message);
+  res.json({ success: true });
+}));
+
 /* 404 & SPA fallback */
 app.use('/api/*', (req, res) => res.status(404).json({ error: `Not found: ${req.method} ${req.path}` }));
 app.get('*', (req, res) => {
