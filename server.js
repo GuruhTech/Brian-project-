@@ -684,12 +684,38 @@ app.get('*', (req, res) => {
 });
 app.use((err, req, res, _n) => { if (!res.headersSent) res.status(500).json({ error: err.message }); });
 
+/* ── Seed admin account if not present ──────────────────────────── */
+async function seedAdmin() {
+  try {
+    if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) return;
+    const { data: existing } = await getSupabase()
+      .from('clients')
+      .select('id')
+      .eq('email', 'admin@brisamotors.co.ke')
+      .single();
+    if (existing) return;
+    const hash = await bcrypt.hash('Admin@1234', 10);
+    await getSupabase().from('clients').insert({
+      name: 'Brisa Admin',
+      email: 'admin@brisamotors.co.ke',
+      password: hash,
+      phone: null,
+      role: 'admin',
+      created_at: nowISO(),
+    });
+    console.log('✅  Admin account seeded: admin@brisamotors.co.ke / Admin@1234');
+  } catch (e) {
+    console.warn('⚠️  Admin seed skipped:', e.message);
+  }
+}
+
 /* Start */
 if (require.main === module) {
-  app.listen(PORT, () => {
+  app.listen(PORT, async () => {
     console.log(`\n🚗  Brisa Motors v3 (Supabase + Paystack)`);
     console.log(`   URL:    http://localhost:${PORT}`);
     console.log(`   Admin:  admin@brisamotors.co.ke  /  Admin@1234\n`);
+    await seedAdmin();
   });
 }
 
