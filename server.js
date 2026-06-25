@@ -675,6 +675,13 @@ app.get('/api/admin/clients', auth, adminOnly, go(async (req, res) => {
   res.json(clients || []);
 }));
 
+app.get('/api/admin/clients/:id', auth, adminOnly, go(async (req, res) => {
+  const { data: client } = await supabase.from('clients').select('id,name,email,phone,role,created_at').eq('id', req.params.id).single();
+  if (!client) return res.status(404).json({ error: 'Client not found.' });
+  const summary = await getUserSummary(client.id);
+  res.json({ client, summary });
+}));
+
 /* 404 & SPA fallback */
 app.use('/api/*', (req, res) => res.status(404).json({ error: `Not found: ${req.method} ${req.path}` }));
 app.get('*', (req, res) => {
