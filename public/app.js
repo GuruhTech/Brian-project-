@@ -361,14 +361,14 @@ function openPayModal(type, refId, desc, amount, qty) {
     <div class="pay-methods">
       <p style="font-size:.85rem;color:#6b7280;margin-bottom:.5rem;font-weight:600">CHOOSE PAYMENT METHOD</p>
       <button class="pay-method-btn" onclick="payWithPaystack('${type}',${refId},${amount},${qty})">
-        <span class="ico">💳</span> Pay with Paystack (Card / Mobile Money)
+        <span class="ico">💳</span> Pay with Paystack (Card / M-Pesa / Bank Transfer)
       </button>
       ${type !== 'repair' ? `
       <button class="pay-method-btn" onclick="payManual('${type}',${refId},'cash',${qty})">
         <span class="ico">💵</span> Cash Payment (Pay in person)
       </button>
       <button class="pay-method-btn" onclick="payManual('${type}',${refId},'bank_transfer',${qty})">
-        <span class="ico">🏦</span> Bank Transfer
+        <span class="ico">🏦</span> Manual Bank Deposit (awaiting admin approval)
       </button>` : ''}
     </div>
   `;
