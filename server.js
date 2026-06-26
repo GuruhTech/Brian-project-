@@ -428,6 +428,14 @@ app.post('/api/payments/paystack/initialize', auth, go(async (req, res) => {
     amount:    paystackAmount,
     currency:  'KES',
     reference,
+    /* Show every channel Paystack supports for Kenya-based businesses:
+       - card          → Visa / Mastercard / Amex (+ Apple Pay shows automatically on eligible devices)
+       - mobile_money   → Pay with M-PESA (STK push) and other mobile money wallets
+       - bank_transfer  → Pesalink instant bank transfer
+       NOTE: mobile_money / bank_transfer must also be switched ON in your
+       Paystack Dashboard → Settings → Preferences, or Paystack will skip
+       them even though they're listed here. */
+    channels: ['card', 'mobile_money', 'bank_transfer'],
     metadata: {
       payment_type, reference_id: Number(reference_id), quantity: itemCount,
       client_id: client.id, description,
