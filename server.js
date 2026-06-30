@@ -683,6 +683,16 @@ app.get('/api/admin/clients', auth, adminOnly, go(async (req, res) => {
   res.json(clients || []);
 }));
 
+/* All appointments with client info */
+app.get('/api/admin/appointments', auth, adminOnly, go(async (req, res) => {
+  const { data: appts } = await supabase.from('appointments').select('*').order('appointment_date', { ascending: false });
+  if (!appts || !appts.length) return res.json([]);
+  const clientIds = [...new Set(appts.map(a => a.client_id))];
+  const { data: clients } = await supabase.from('clients').select('id,name,email').in('id', clientIds);
+  const cMap = Object.fromEntries((clients || []).map(c => [c.id, c]));
+  res.json(appts.map(a => ({ ...a, client_name: cMap[a.client_id]?.name || null, client_email: cMap[a.client_id]?.email || null })));
+}));
+
 app.get('/api/admin/clients/:id', auth, adminOnly, go(async (req, res) => {
   const { data: client } = await supabase.from('clients').select('id,name,email,phone,role,created_at').eq('id', req.params.id).single();
   if (!client) return res.status(404).json({ error: 'Client not found.' });
@@ -761,6 +771,7 @@ app.put('/api/admin/parts/:id', auth, adminOnly, go(async (req, res) => {
   allowed.forEach(k => { if (b[k] !== undefined) updates[k] = numeric.includes(k) ? Number(b[k]) : b[k]; });
   const result = await supabase.from('parts').update(updates).eq('id', req.params.id).select().single();
   if (result.error) throw new Error(result.error.message);
+  checkLowStock(Number(req.params.id)).catch(() => {});
   res.json(result.data);
 }));
 
