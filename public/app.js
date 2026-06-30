@@ -110,6 +110,7 @@ function showPage(name) {
   if (name === 'cars')   loadCars();
   if (name === 'parts')  loadParts();
   if (name === 'book')   initBookPage();
+  if (name === 'contact') initContactPage();
 }
 
 document.querySelectorAll('.nav-link').forEach(link => {
@@ -531,14 +532,14 @@ function switchDashTab(tab, btn) {
   if (tab === 'invoices') {
     if (!s.invoices.length) { el.innerHTML = empty('🧾','No invoices yet','Invoices are generated after payment.'); return; }
     el.innerHTML = `<div class="table-wrap"><table>
-      <thead><tr><th>Invoice #</th><th>Date</th><th>Type</th><th>Amount</th><th>Method</th><th>Ref</th></tr></thead>
+      <thead><tr><th>Invoice #</th><th>Date</th><th>Type</th><th>Amount</th><th>Method</th><th></th></tr></thead>
       <tbody>${s.invoices.map(inv => `<tr>
         <td><strong>${esc(inv.invoice_number || '#' + inv.id)}</strong></td>
         <td>${fmtDate(inv.issued_at)}</td>
         <td>${esc(inv.invoice_type?.replace('_',' ') || '—')}</td>
         <td>${fmtKsh(inv.total_amount)}</td>
         <td>${esc(inv.method || '—')}</td>
-        <td style="font-size:.78rem;color:#6b7280">${esc(inv.paystack_ref || '—')}</td>
+        <td><button class="btn btn-download btn-sm" onclick="downloadInvoice(${inv.id},'${esc(inv.invoice_number||'INV')}')">⬇ PDF</button></td>
       </tr>`).join('')}</tbody>
     </table></div>`;
   }
@@ -624,6 +625,31 @@ function switchAdminTab(tab, btn) {
   if (!adminData) return;
   const el = document.getElementById('adminContent');
   const s  = adminData.summary;
+
+  if (tab === 'appointments') {
+    // fetch all appointments from admin
+    apiFetch('/api/admin/appointments').then(appts => {
+      if (!appts.length) { el.innerHTML = empty('📅', 'No appointments yet', ''); return; }
+      el.innerHTML = `<div class="table-wrap"><table>
+        <thead><tr><th>Date</th><th>Time</th><th>Client</th><th>Service</th><th>Vehicle</th><th>Status</th><th></th></tr></thead>
+        <tbody>${appts.map(a => `<tr>
+          <td>${fmtDate(a.appointment_date)}</td>
+          <td>${esc(a.time_slot || '—')}</td>
+          <td>${esc(a.client_name || '—')}<br><span style="font-size:.75rem;color:#6b7280">${esc(a.client_email || '')}</span></td>
+          <td>${esc(a.service_type || '—')}</td>
+          <td>${a.car_make ? esc(a.car_make + ' ' + (a.car_model || '')) : '—'}${a.car_plate ? '<br><span style="font-size:.75rem;color:#6b7280">' + esc(a.car_plate) + '</span>' : ''}</td>
+          <td><span class="badge ${a.status === 'scheduled' ? 'badge-amber' : a.status === 'completed' ? 'badge-green' : a.status === 'in_progress' ? 'badge-blue' : 'badge-gray'}">${esc(a.status)}</span></td>
+          <td>
+            <select onchange="updateApptStatus(${a.id}, this.value)" style="font-size:.8rem;padding:.3rem .5rem;border-radius:6px;border:1.5px solid #e5e7eb">
+              <option value="">Change…</option>
+              ${['scheduled','in_progress','completed','cancelled'].map(s => `<option value="${s}" ${a.status===s?'selected':''}>${s.replace('_',' ')}</option>`).join('')}
+            </select>
+          </td>
+        </tr>`).join('')}</tbody>
+      </table></div>`;
+    }).catch(err => { el.innerHTML = `<p style="color:#dc2626">${esc(err.message)}</p>`; });
+    return;
+  }
 
   if (tab === 'overview') {
     if (!s.monthly_revenue.length) { el.innerHTML = empty('📊', 'No revenue yet', 'Monthly revenue will show up here once payments come in.'); return; }
@@ -1019,6 +1045,118 @@ function printCompanyReport() {
     </table>
   `;
   printReport('Company Report', body);
+}
+
+
+/* ── CONTACT PAGE ─────────────────────────────────────────────────── */
+function initContactPage() {
+  if (currentUser) {
+    document.getElementById('cName').value  = currentUser.name  || '';
+    document.getElementById('cEmail').value = currentUser.email || '';
+    document.getElementById('cPhone').value = currentUser.phone || '';
+  }
+}
+
+async function handleContact(e) {
+  e.preventDefault();
+  const btn = document.getElementById('contactSubmit');
+  btn.disabled = true; btn.textContent = 'Sending…';
+  try {
+    await apiFetch('/api/contact', {
+      method: 'POST',
+      body: JSON.stringify({
+        name:    document.getElementById('cName').value,
+        email:   document.getElementById('cEmail').value,
+        phone:   document.getElementById('cPhone').value,
+        subject: document.getElementById('cSubject').value,
+        message: document.getElementById('cMessage').value,
+      }),
+    });
+    toast('Message sent! We'll get back to you shortly.', 'success');
+    document.getElementById('contactForm').reset();
+    initContactPage();
+  } catch (err) { toast(err.message, 'error'); }
+  btn.disabled = false; btn.textContent = 'Send Message';
+}
+
+/* ── INVOICE PDF DOWNLOAD ─────────────────────────────────────────── */
+async function downloadInvoice(invoiceId, invoiceNumber) {
+  try {
+    const inv = await apiFetch('/api/invoices/' + invoiceId);
+    const win = window.open('', '_blank');
+    if (!win) { toast('Allow pop-ups to download invoices.', 'error'); return; }
+    const lines = (inv.line_items || []).map(l => `
+      <tr>
+        <td>${esc(l.description)}</td>
+        <td style="text-align:center">${l.qty}</td>
+        <td style="text-align:right">Ksh ${Number(l.unit_price).toLocaleString('en-KE')}</td>
+        <td style="text-align:right">Ksh ${Number(l.total).toLocaleString('en-KE')}</td>
+      </tr>`).join('');
+    const subtotal = inv.total_amount / 1.16;
+    const tax      = inv.total_amount - subtotal;
+    win.document.write(`<!DOCTYPE html><html><head><meta charset="UTF-8"/>
+      <title>Invoice ${esc(inv.invoice_number)}</title>
+      <style>
+        body{font-family:Arial,sans-serif;color:#111;padding:2.5rem;max-width:700px;margin:0 auto}
+        .header{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:2rem}
+        .logo{font-size:1.4rem;font-weight:800;color:#1a1a2e}
+        .logo span{color:#e8b92f}
+        .inv-title{text-align:right}
+        .inv-title h1{font-size:1.8rem;margin:0;color:#1a1a2e}
+        .inv-title p{margin:.2rem 0;font-size:.9rem;color:#666}
+        .meta{display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin-bottom:2rem;background:#f9fafb;padding:1rem;border-radius:8px}
+        .meta-block label{font-size:.72rem;text-transform:uppercase;color:#666;letter-spacing:.05em;display:block;margin-bottom:.2rem}
+        .meta-block p{margin:0;font-weight:600}
+        table{width:100%;border-collapse:collapse;margin:1rem 0}
+        th{background:#1a1a2e;color:#fff;padding:.6rem .75rem;text-align:left;font-size:.82rem}
+        td{padding:.6rem .75rem;border-bottom:1px solid #e5e7eb;font-size:.88rem}
+        .totals{margin-left:auto;width:260px}
+        .total-row{display:flex;justify-content:space-between;padding:.4rem 0;font-size:.9rem;border-bottom:1px solid #eee}
+        .total-row.grand{font-weight:800;font-size:1.1rem;border-bottom:none;margin-top:.5rem;color:#1a1a2e}
+        .footer{margin-top:3rem;text-align:center;font-size:.8rem;color:#999;border-top:1px solid #eee;padding-top:1rem}
+        @media print{body{padding:0}}
+      </style>
+    </head><body>
+      <div class="header">
+        <div class="logo">🚗 Brisa<span>Motors</span></div>
+        <div class="inv-title">
+          <h1>INVOICE</h1>
+          <p><strong>${esc(inv.invoice_number)}</strong></p>
+          <p>Date: ${fmtDate(inv.issued_at)}</p>
+        </div>
+      </div>
+      <div class="meta">
+        <div class="meta-block"><label>Billed To</label><p>${esc(inv.client_name || '')}<br/>${esc(inv.client_email || '')}</p></div>
+        <div class="meta-block"><label>Payment Method</label><p>${esc(inv.method || '—')}</p></div>
+      </div>
+      <table>
+        <thead><tr><th>Description</th><th style="text-align:center">Qty</th><th style="text-align:right">Unit Price</th><th style="text-align:right">Total</th></tr></thead>
+        <tbody>${lines}</tbody>
+      </table>
+      <div class="totals">
+        <div class="total-row"><span>Subtotal (excl. VAT)</span><span>Ksh ${subtotal.toLocaleString('en-KE',{minimumFractionDigits:2})}</span></div>
+        <div class="total-row"><span>VAT (16%)</span><span>Ksh ${tax.toLocaleString('en-KE',{minimumFractionDigits:2})}</span></div>
+        <div class="total-row grand"><span>Total</span><span>Ksh ${Number(inv.total_amount).toLocaleString('en-KE',{minimumFractionDigits:2})}</span></div>
+      </div>
+      <div class="footer">Brisa Motors &bull; Thika, Kenya &bull; +254 715 594 628 &bull; Thank you for your business!</div>
+    </body></html>`);
+    win.document.close();
+    win.onload = () => win.print();
+    setTimeout(() => { try { win.print(); } catch {} }, 300);
+  } catch (err) { toast('Could not load invoice: ' + err.message, 'error'); }
+}
+
+/* ── APPOINTMENT STATUS UPDATE (admin) ───────────────────────────── */
+async function updateApptStatus(apptId, newStatus) {
+  try {
+    await apiFetch('/api/appointments/' + apptId + '/status', {
+      method: 'PUT',
+      body: JSON.stringify({ status: newStatus }),
+    });
+    toast('Status updated.', 'success');
+    adminData = null;
+    loadAdmin();
+  } catch (err) { toast(err.message, 'error'); }
 }
 
 /* ── Init ────────────────────────────────────────────────────────── */
