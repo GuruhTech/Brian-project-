@@ -22,6 +22,7 @@
       <a href="#" class="nav-link" data-page="book">Book Service</a>
       <a href="#" class="nav-link" id="dashNav" data-page="dashboard" style="display:none">My Account</a>
       <a href="#" class="nav-link" id="adminNav" data-page="admin" style="display:none">Admin</a>
+      <a href="#" class="nav-link" data-page="contact">Contact</a>
     </nav>
     <div class="header-actions">
       <button class="btn btn-outline" id="loginBtn" onclick="openAuth()">Sign In</button>
@@ -38,6 +39,7 @@
     <a href="#" onclick="showPage('book');toggleMenu()">Book Service</a>
     <a href="#" id="mDashNav" style="display:none" onclick="showPage('dashboard');toggleMenu()">My Account</a>
     <a href="#" id="mAdminNav" style="display:none" onclick="showPage('admin');toggleMenu()">Admin</a>
+    <a href="#" onclick="showPage('contact');toggleMenu()">Contact</a>
     <a href="#" id="mLoginLink" onclick="openAuth();toggleMenu()">Sign In</a>
     <a href="#" id="mLogoutLink" style="display:none" onclick="logout();toggleMenu()">Sign Out</a>
   </div>
@@ -238,6 +240,7 @@
       <!-- Tabs -->
       <div class="tabs" id="adminTabs">
         <button class="tab active" onclick="switchAdminTab('overview', this)">Overview</button>
+        <button class="tab" onclick="switchAdminTab('appointments', this)">Appointments</button>
         <button class="tab" onclick="switchAdminTab('clients', this)">Clients</button>
         <button class="tab" onclick="switchAdminTab('repairs', this)">Recent Repairs</button>
         <button class="tab" onclick="switchAdminTab('invoices', this)">Recent Invoices</button>
@@ -245,6 +248,80 @@
       </div>
 
       <div id="adminContent"></div>
+    </div>
+  </section>
+
+
+  <!-- CONTACT PAGE -->
+  <section id="contactPage" class="page">
+    <div class="page-hero">
+      <div class="container">
+        <h1>Contact & Support</h1>
+        <p>Have a question or issue? We're here to help. Send us a message and we'll get back to you.</p>
+      </div>
+    </div>
+    <div class="container">
+      <div class="contact-grid">
+        <!-- Contact Form -->
+        <div class="form-card" style="margin:0">
+          <h2 style="margin-bottom:1.5rem;font-size:1.25rem">Send us a Message</h2>
+          <form id="contactForm" onsubmit="handleContact(event)">
+            <label>Full Name * <input type="text" id="cName" required placeholder="Your name" /></label>
+            <label>Email * <input type="email" id="cEmail" required placeholder="your@email.com" /></label>
+            <label>Phone <input type="tel" id="cPhone" placeholder="+254 7XX XXX XXX" /></label>
+            <label>Subject * <input type="text" id="cSubject" required placeholder="e.g. Appointment issue, Payment query…" /></label>
+            <label>Message *
+              <textarea id="cMessage" rows="5" required placeholder="Describe your issue or question…"></textarea>
+            </label>
+            <button type="submit" class="btn btn-primary btn-lg" id="contactSubmit">Send Message</button>
+          </form>
+        </div>
+
+        <!-- Info Panel -->
+        <div class="contact-info">
+          <div class="contact-info-card">
+            <div class="contact-info-icon">📍</div>
+            <div>
+              <div class="contact-info-label">Location</div>
+              <div class="contact-info-value">Thika, Kenya</div>
+            </div>
+          </div>
+          <div class="contact-info-card">
+            <div class="contact-info-icon">📞</div>
+            <div>
+              <div class="contact-info-label">WhatsApp / Call</div>
+              <div class="contact-info-value">
+                <a href="https://wa.me/254715594628" target="_blank">+254 715 594 628</a>
+              </div>
+            </div>
+          </div>
+          <div class="contact-info-card">
+            <div class="contact-info-icon">✉️</div>
+            <div>
+              <div class="contact-info-label">Email</div>
+              <div class="contact-info-value">
+                <a href="mailto:noreply@gurutech.top">noreply@gurutech.top</a>
+              </div>
+            </div>
+          </div>
+          <div class="contact-info-card">
+            <div class="contact-info-icon">🕐</div>
+            <div>
+              <div class="contact-info-label">Working Hours</div>
+              <div class="contact-info-value">Mon – Sat: 8am – 6pm<br/>Sun: Closed</div>
+            </div>
+          </div>
+
+          <!-- Google Map -->
+          <div class="map-embed">
+            <iframe
+              src="https://www.google.com/maps/embed?pb=!1m18!1m12!1m3!1d63821.97738802809!2d37.06330!3d-1.03326!2m3!1f0!2f0!3f0!3m2!1i1024!2i768!4f13.1!3m3!1m2!1s0x182f4fb4a4e6c53b%3A0x3b7e6b5e7b1e5b1a!2sThika%2C%20Kenya!5e0!3m2!1sen!2ske!4v1718000000000!5m2!1sen!2ske"
+              width="100%" height="220" style="border:0;border-radius:10px" allowfullscreen loading="lazy"
+              referrerpolicy="no-referrer-when-downgrade">
+            </iframe>
+          </div>
+        </div>
+      </div>
     </div>
   </section>
 
@@ -285,10 +362,18 @@
 <footer>
   <div class="container footer-inner">
     <span>🚗 Brisa Motors &copy; 2025 &mdash; Nairobi, Kenya</span>
-    <span>📞 +254 700 000 000 &nbsp;|&nbsp; ✉️ info@brisamotors.co.ke</span>
+    <span>📞 <a href="https://wa.me/254715594628" style="color:rgba(255,255,255,.65)">+254 715 594 628</a> &nbsp;|&nbsp; ✉️ noreply@gurutech.top &nbsp;|&nbsp; 📍 Thika, Kenya</span>
   </div>
 </footer>
 
 <script src="app.js"></script>
+
+<!-- WhatsApp Float Button -->
+<a href="https://wa.me/254715594628" target="_blank" class="wa-float" title="Chat on WhatsApp">
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="28" height="28" fill="#fff">
+    <path d="M16 0C7.163 0 0 7.163 0 16c0 2.825.736 5.476 2.027 7.774L0 32l8.454-2.016A15.93 15.93 0 0016 32c8.837 0 16-7.163 16-16S24.837 0 16 0zm0 29.333a13.27 13.27 0 01-6.77-1.848l-.485-.29-5.02 1.197 1.224-4.884-.317-.5A13.267 13.267 0 012.667 16C2.667 8.636 8.636 2.667 16 2.667S29.333 8.636 29.333 16 23.364 29.333 16 29.333zm7.27-9.937c-.398-.199-2.354-1.162-2.72-1.294-.365-.133-.63-.199-.896.199-.265.397-1.029 1.294-1.261 1.56-.232.265-.465.298-.863.1-.398-.199-1.68-.619-3.2-1.974-1.183-1.054-1.98-2.356-2.213-2.754-.232-.397-.025-.612.175-.81.18-.178.398-.465.597-.697.2-.232.265-.398.398-.663.133-.266.067-.498-.033-.697-.1-.199-.896-2.16-1.228-2.957-.323-.775-.65-.67-.896-.682l-.763-.013c-.265 0-.697.1-1.063.498-.365.397-1.394 1.362-1.394 3.322 0 1.96 1.427 3.853 1.626 4.119.199.265 2.808 4.287 6.803 6.013.951.41 1.693.655 2.272.839.955.303 1.824.26 2.511.158.766-.115 2.354-.962 2.686-1.89.332-.927.332-1.722.232-1.89-.1-.166-.365-.265-.763-.464z"/>
+  </svg>
+</a>
+
 </body>
 </html>
