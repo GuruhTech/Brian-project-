@@ -10,8 +10,14 @@ const https   = require('https');
 const path    = require('path');
 const fs      = require('fs');
 const { createClient } = require('@supabase/supabase-js');
+const { Resend } = require('resend');
 
 dotenv.config();
+
+const mailer = require('./email');
+
+const _resend = process.env.RESEND_API_KEY ? new Resend(process.env.RESEND_API_KEY) : null;
+const FROM_EMAIL = process.env.FROM_EMAIL || 'Brisa Motors <noreply@gurutech.top>';
 
 const PORT                = parseInt(process.env.PORT || '5000', 10);
 const JWT_SECRET          = process.env.JWT_SECRET || 'brisa_motors_jwt_v3_secret_key';
@@ -213,6 +219,8 @@ app.post('/api/auth/register', go(async (req, res) => {
   const client  = result.data;
   const summary = await getUserSummary(client.id);
   res.status(201).json({ token: makeToken(client), user: { id: client.id, name: client.name, email, phone: client.phone, role: 'client', created_at: client.created_at }, summary });
+  mailer.sendWelcomeEmail({ name: client.name, email }).catch(() => {});
+  mailer.adminNewUser({ name: client.name, email, phone: client.phone }).catch(() => {});
 }));
 
 app.post('/api/auth/login', go(async (req, res) => {
@@ -260,8 +268,9 @@ app.post('/api/auth/forgot-password', go(async (req, res) => {
   await supabase.from('resets').delete().eq('email', email);
   await supabase.from('resets').insert({ email, token, expires, used: false });
   const resetUrl = `${process.env.APP_URL || 'http://localhost:' + PORT}/reset-password.html?token=${token}`;
-  console.log(`\n📧  Password reset for ${email}:\n   ${resetUrl}\n`);
-  res.json({ message: 'Reset link sent (check server console).', dev_reset_url: resetUrl });
+  mailer.sendPasswordResetEmail({ email, resetUrl }).catch(() => {});
+  console.log(`\n📧  Password reset link sent to ${email}\n`);
+  res.json({ message: 'Reset link sent to your email.' });
 }));
 
 app.post('/api/auth/reset-password', go(async (req, res) => {
@@ -327,6 +336,8 @@ app.post('/api/appointments', auth, go(async (req, res) => {
   const result = await supabase.from('appointments').insert({ client_id: req.user.id, appointment_date, time_slot, service_type, car_make: car_make || null, car_model: car_model || null, car_year: car_year || null, car_plate: plate || null, notes: notes || null, status: 'scheduled', created_at: nowISO() }).select().single();
   if (result.error) throw new Error(result.error.message);
   res.status(201).json({ id: result.data.id, message: 'Appointment booked.', prior_visits: (priorRepairs || []).length, repair_history: priorRepairs || [] });
+  mailer.sendAppointmentConfirmEmail({ name: req.user.name, email: req.user.email, date: appointment_date, timeSlot: time_slot, serviceType: service_type, carPlate: plate }).catch(() => {});
+  mailer.adminNewAppointment({ clientName: req.user.name, clientEmail: req.user.email, date: appointment_date, timeSlot: time_slot, serviceType: service_type, carPlate: plate, carMake: car_make, carModel: car_model }).catch(() => {});
 }));
 
 app.get('/api/appointments/my', auth, go(async (req, res) => {
@@ -374,6 +385,10 @@ app.post('/api/repairs/report', auth, adminOnly, go(async (req, res) => {
   const result = await supabase.from('repairs').insert({ appointment_id: appointment_id || null, client_id, car_plate: car_plate || null, diagnosis, parts_used: parts_used || [], labor_hours: labor_hours || 0, total_cost, mechanic_notes: mechanic_notes || null, payment_status: 'unpaid', resolved_at: nowISO() }).select().single();
   if (result.error) throw new Error(result.error.message);
   res.status(201).json({ id: result.data.id, message: 'Report created.' });
+  supabase.from('clients').select('name,email').eq('id', client_id).single()
+    .then(({ data: rc }) => {
+      if (rc) mailer.adminRepairReport({ clientName: rc.name, clientEmail: rc.email, diagnosis, totalCost: total_cost, carPlate: car_plate }).catch(() => {});
+    }).catch(() => {});
 }));
 
 /* ── Paystack Payments ──────────────────────────────────────────── */
@@ -548,6 +563,16 @@ async function fulfillPayment(record, amount) {
 
   const invoice = await createInvoice(record.client_id, record.id, record.payment_type, record.reference_id, lineItems, amount);
   await supabase.from('payments').update({ invoice_id: invoice.id, invoice_number: invoice.invoice_number }).eq('id', record.id);
+
+  // Email client and admin
+  try {
+    const { data: pc } = await supabase.from('clients').select('name,email').eq('id', record.client_id).single();
+    if (pc) {
+      const desc = lineItems.map(l => l.description).join(', ');
+      mailer.sendPaymentReceiptEmail({ name: pc.name, email: pc.email, amount, method: record.method || 'paystack', paymentType: record.payment_type, description: desc, invoiceNumber: invoice.invoice_number }).catch(() => {});
+      mailer.adminPaymentReceived({ clientName: pc.name, clientEmail: pc.email, amount, method: record.method || 'paystack', paymentType: record.payment_type, description: desc, invoiceNumber: invoice.invoice_number }).catch(() => {});
+    }
+  } catch (_) {}
 }
 
 /* Manual/cash payment for cars */
@@ -566,6 +591,9 @@ app.post('/api/payments/car', auth, go(async (req, res) => {
   const items   = [{ description: `${car.make} ${car.model} ${car.year}${car.color ? ` (${car.color})` : ''}`, qty: 1, unit_price: (amount / 1.16).toFixed(2), total: (amount / 1.16).toFixed(2) }];
   const invoice = await createInvoice(req.user.id, payRes.data.id, 'car_sale', car.id, items, amount);
   res.status(201).json({ payment_id: payRes.data.id, amount, method, invoice, inventory: { remaining: newQty } });
+  const carDesc = `${car.make} ${car.model} ${car.year}`;
+  mailer.sendPaymentReceiptEmail({ name: req.user.name, email: req.user.email, amount, method, paymentType: 'car_sale', description: carDesc, invoiceNumber: invoice?.invoice_number }).catch(() => {});
+  mailer.adminPaymentReceived({ clientName: req.user.name, clientEmail: req.user.email, amount, method, paymentType: 'car_sale', description: carDesc, invoiceNumber: invoice?.invoice_number }).catch(() => {});
 }));
 
 /* Manual/cash payment for parts */
@@ -584,6 +612,10 @@ app.post('/api/payments/parts', auth, go(async (req, res) => {
   const items   = [{ description: `${part.name} ×${qty}`, qty, unit_price: part.price, total: amount }];
   const invoice = await createInvoice(req.user.id, payRes.data.id, 'part_order', part.id, items, amount);
   res.status(201).json({ payment_id: payRes.data.id, amount, method, invoice, inventory: { remaining: part.stock - qty } });
+  const partDesc = `${part.name} ×${qty}`;
+  mailer.sendPaymentReceiptEmail({ name: req.user.name, email: req.user.email, amount, method, paymentType: 'part_order', description: partDesc, invoiceNumber: invoice?.invoice_number }).catch(() => {});
+  mailer.adminPaymentReceived({ clientName: req.user.name, clientEmail: req.user.email, amount, method, paymentType: 'part_order', description: partDesc, invoiceNumber: invoice?.invoice_number }).catch(() => {});
+  checkLowStock(part.id).catch(() => {});
 }));
 
 /* Manual/cash payment for repairs */
@@ -601,6 +633,9 @@ app.post('/api/payments/repair', auth, go(async (req, res) => {
   const items   = [{ description: `Repair — ${report.diagnosis}`, qty: 1, unit_price: (amount / 1.16).toFixed(2), total: (amount / 1.16).toFixed(2) }];
   const invoice = await createInvoice(req.user.id, payRes.data.id, 'repair', report.id, items, amount);
   res.status(201).json({ payment_id: payRes.data.id, amount, method, invoice });
+  const repairDesc = `Repair — ${report.diagnosis}`;
+  mailer.sendPaymentReceiptEmail({ name: req.user.name, email: req.user.email, amount, method, paymentType: 'repair', description: repairDesc, invoiceNumber: invoice?.invoice_number }).catch(() => {});
+  mailer.adminPaymentReceived({ clientName: req.user.name, clientEmail: req.user.email, amount, method, paymentType: 'repair', description: repairDesc, invoiceNumber: invoice?.invoice_number }).catch(() => {});
 }));
 
 /* Invoices */
@@ -779,6 +814,81 @@ app.delete('/api/admin/parts/:id', auth, adminOnly, go(async (req, res) => {
   const result = await supabase.from('parts').delete().eq('id', req.params.id);
   if (result.error) throw new Error(result.error.message);
   res.json({ success: true });
+}));
+
+/* Low stock alert helper */
+async function checkLowStock(partId) {
+  try {
+    const { data: part } = await supabase.from('parts').select('name,stock').eq('id', partId).single();
+    if (part && part.stock < 5 && part.stock >= 0) {
+      if (_resend && process.env.ADMIN_EMAIL) {
+        const html = `<!DOCTYPE html><html><body style="font-family:Arial,sans-serif;background:#f4f4f4;padding:30px">
+          <div style="max-width:560px;margin:0 auto;background:#fff;border-radius:8px;overflow:hidden">
+            <div style="background:#1a1a2e;padding:20px 28px"><h1 style="margin:0;color:#e8c96d;font-size:20px">🚗 Brisa Motors</h1></div>
+            <div style="padding:24px 28px">
+              <h2 style="margin-top:0;color:#b45309">⚠️ Low Stock Alert</h2>
+              <p>A part is running low and may need restocking soon.</p>
+              <table style="width:100%;border-collapse:collapse;margin:16px 0">
+                <tr><td style="padding:8px 12px;border-bottom:1px solid #eee;font-weight:bold;width:40%">Part</td><td style="padding:8px 12px;border-bottom:1px solid #eee">${part.name}</td></tr>
+                <tr><td style="padding:8px 12px;font-weight:bold">Remaining Stock</td><td style="padding:8px 12px"><strong style="color:#dc2626">${part.stock} unit${part.stock !== 1 ? 's' : ''}</strong></td></tr>
+              </table>
+              <a href="${process.env.APP_URL || 'https://brisa-motors.gurutech.top'}/admin" style="display:inline-block;padding:10px 24px;background:#e8c96d;color:#1a1a2e;border-radius:6px;text-decoration:none;font-weight:bold">Go to Inventory</a>
+            </div>
+            <div style="background:#f8f8f8;padding:14px 28px;text-align:center;font-size:12px;color:#888">Brisa Motors &bull; Thika, Kenya</div>
+          </div>
+        </body></html>`;
+        _resend.emails.send({ from: FROM_EMAIL, to: process.env.ADMIN_EMAIL, subject: `⚠️ Low Stock: ${part.name} (${part.stock} left)`, html }).catch(() => {});
+      }
+    }
+  } catch (_) {}
+}
+
+/* ── Contact / Support ───────────────────────────────────────────── */
+app.post('/api/contact', go(async (req, res) => {
+  const { name, email: userEmail, phone, subject, message } = req.body || {};
+  if (!name?.trim() || !userEmail?.trim() || !subject?.trim() || !message?.trim()) {
+    return res.status(400).json({ error: 'Name, email, subject and message are required.' });
+  }
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(userEmail)) {
+    return res.status(400).json({ error: 'Invalid email address.' });
+  }
+  await mailer.adminContactMessage({ name: name.trim(), email: userEmail.trim(), phone: phone || '', subject: subject.trim(), message: message.trim() });
+  mailer.sendContactAckEmail({ name: name.trim(), email: userEmail.trim(), subject: subject.trim(), message: message.trim() }).catch(() => {});
+  res.json({ message: 'Your message has been sent. We will get back to you shortly.' });
+}));
+
+/* Update appointment status (admin) */
+app.put('/api/appointments/:id/status', auth, adminOnly, go(async (req, res) => {
+  const { status } = req.body || {};
+  const validStatuses = ['scheduled', 'in_progress', 'completed', 'cancelled'];
+  if (!validStatuses.includes(status)) return res.status(400).json({ error: 'Invalid status.' });
+  const apptId = Number(req.params.id);
+  const { data: appt } = await supabase.from('appointments').select('*').eq('id', apptId).single();
+  if (!appt) return res.status(404).json({ error: 'Appointment not found.' });
+  await supabase.from('appointments').update({ status }).eq('id', apptId);
+  const { data: client } = await supabase.from('clients').select('name,email').eq('id', appt.client_id).single();
+  if (client && _resend) {
+    const statusLabels = { scheduled: 'Scheduled', in_progress: 'In Progress', completed: 'Completed', cancelled: 'Cancelled' };
+    const statusColors = { scheduled: '#b45309', in_progress: '#1d4ed8', completed: '#16a34a', cancelled: '#dc2626' };
+    const html = `<!DOCTYPE html><html><body style="font-family:Arial,sans-serif;background:#f4f4f4;padding:30px">
+      <div style="max-width:560px;margin:0 auto;background:#fff;border-radius:8px;overflow:hidden">
+        <div style="background:#1a1a2e;padding:20px 28px"><h1 style="margin:0;color:#e8c96d;font-size:20px">🚗 Brisa Motors</h1></div>
+        <div style="padding:24px 28px">
+          <h2 style="margin-top:0">Appointment Update</h2>
+          <p>Hi ${client.name.split(' ')[0]}, your appointment status has been updated.</p>
+          <table style="width:100%;border-collapse:collapse;margin:16px 0">
+            <tr><td style="padding:8px 12px;border-bottom:1px solid #eee;font-weight:bold;width:40%">Date</td><td style="padding:8px 12px;border-bottom:1px solid #eee">${appt.appointment_date}</td></tr>
+            <tr><td style="padding:8px 12px;border-bottom:1px solid #eee;font-weight:bold">Service</td><td style="padding:8px 12px;border-bottom:1px solid #eee">${appt.service_type}</td></tr>
+            <tr><td style="padding:8px 12px;font-weight:bold">New Status</td><td style="padding:8px 12px"><span style="background:${statusColors[status] || '#666'};color:#fff;padding:3px 10px;border-radius:12px;font-size:13px;font-weight:bold">${statusLabels[status]}</span></td></tr>
+          </table>
+          <a href="${process.env.APP_URL || 'https://brisa-motors.gurutech.top'}" style="display:inline-block;padding:10px 24px;background:#e8c96d;color:#1a1a2e;border-radius:6px;text-decoration:none;font-weight:bold">View My Appointments</a>
+        </div>
+        <div style="background:#f8f8f8;padding:14px 28px;text-align:center;font-size:12px;color:#888">Brisa Motors &bull; Thika, Kenya</div>
+      </div>
+    </body></html>`;
+    _resend.emails.send({ from: FROM_EMAIL, to: client.email, subject: `🔔 Appointment ${statusLabels[status]} – Brisa Motors`, html }).catch(() => {});
+  }
+  res.json({ message: 'Status updated.' });
 }));
 
 /* 404 & SPA fallback */
