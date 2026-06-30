@@ -1072,7 +1072,7 @@ async function handleContact(e) {
         message: document.getElementById('cMessage').value,
       }),
     });
-    toast('Message sent! We'll get back to you shortly.', 'success');
+    toast('Message sent! We\'ll get back to you shortly.', 'success');
     document.getElementById('contactForm').reset();
     initContactPage();
   } catch (err) { toast(err.message, 'error'); }
