@@ -867,6 +867,12 @@ app.put('/api/appointments/:id/status', auth, adminOnly, go(async (req, res) => 
   if (!appt) return res.status(404).json({ error: 'Appointment not found.' });
   await supabase.from('appointments').update({ status }).eq('id', apptId);
   const { data: client } = await supabase.from('clients').select('name,email').eq('id', appt.client_id).single();
+  if (client) {
+    // Pickup ready email when status is completed
+    if (status === 'completed') {
+      mailer.sendPickupReadyEmail({ name: client.name, email: client.email, serviceType: appt.service_type, carPlate: appt.car_plate, date: appt.appointment_date }).catch(() => {});
+    }
+  }
   if (client && _resend) {
     const statusLabels = { scheduled: 'Scheduled', in_progress: 'In Progress', completed: 'Completed', cancelled: 'Cancelled' };
     const statusColors = { scheduled: '#b45309', in_progress: '#1d4ed8', completed: '#16a34a', cancelled: '#dc2626' };
