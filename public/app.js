@@ -638,12 +638,12 @@ function switchAdminTab(tab, btn) {
           <td>${esc(a.client_name || '—')}<br><span style="font-size:.75rem;color:#6b7280">${esc(a.client_email || '')}</span></td>
           <td>${esc(a.service_type || '—')}</td>
           <td>${a.car_make ? esc(a.car_make + ' ' + (a.car_model || '')) : '—'}${a.car_plate ? '<br><span style="font-size:.75rem;color:#6b7280">' + esc(a.car_plate) + '</span>' : ''}</td>
-          <td><span class="badge ${a.status === 'scheduled' ? 'badge-amber' : a.status === 'completed' ? 'badge-green' : a.status === 'in_progress' ? 'badge-blue' : 'badge-gray'}">${esc(a.status)}</span></td>
-          <td>
-            <select onchange="updateApptStatus(${a.id}, this.value)" style="font-size:.8rem;padding:.3rem .5rem;border-radius:6px;border:1.5px solid #e5e7eb">
-              <option value="">Change…</option>
-              ${['scheduled','in_progress','completed','cancelled'].map(s => `<option value="${s}" ${a.status===s?'selected':''}>${s.replace('_',' ')}</option>`).join('')}
-            </select>
+          <td><span class="badge ${a.status === 'scheduled' ? 'badge-amber' : a.status === 'completed' ? 'badge-green' : a.status === 'in_progress' ? 'badge-blue' : 'badge-gray'}">${a.status.replace('_',' ')}</span></td>
+          <td style="white-space:nowrap">
+            ${a.status !== 'in_progress' && a.status !== 'completed' && a.status !== 'cancelled' ? `<button onclick="updateApptStatus(${a.id},'in_progress')" style="background:#1d4ed8;color:#fff;border:none;padding:.35rem .75rem;border-radius:6px;font-size:.78rem;cursor:pointer;margin-right:4px">▶ Start</button>` : ''}
+            ${a.status !== 'completed' && a.status !== 'cancelled' ? `<button onclick="updateApptStatus(${a.id},'completed')" style="background:#16a34a;color:#fff;border:none;padding:.35rem .75rem;border-radius:6px;font-size:.78rem;cursor:pointer;margin-right:4px">✅ Complete</button>` : ''}
+            ${a.status !== 'cancelled' && a.status !== 'completed' ? `<button onclick="updateApptStatus(${a.id},'cancelled')" style="background:#dc2626;color:#fff;border:none;padding:.35rem .75rem;border-radius:6px;font-size:.78rem;cursor:pointer">✕ Cancel</button>` : ''}
+            ${a.status === 'completed' || a.status === 'cancelled' ? `<span style="font-size:.78rem;color:#6b7280;font-style:italic">${a.status === 'completed' ? 'Done ✓' : 'Cancelled'}</span>` : ''}
           </td>
         </tr>`).join('')}</tbody>
       </table></div>`;
