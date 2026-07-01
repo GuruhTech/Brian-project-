@@ -234,12 +234,34 @@ async function adminRepairReport({ clientName, clientEmail, diagnosis, totalCost
   await notifyAdmin({ subject: `🔧 Repair Report – ${clientName} | Ksh ${Number(totalCost).toLocaleString('en-KE')}`, html });
 }
 
+async function sendPickupReadyEmail({ name, email, serviceType, carPlate, date }) {
+  const html = wrap(`
+    <h2>Your Vehicle is Ready for Pickup! 🎉</h2>
+    <p>Hi ${name.split(' ')[0]}, great news! Your service has been completed and your vehicle is ready for collection.</p>
+    <table class="info">
+      <tr><td>Service</td><td>${serviceType}</td></tr>
+      ${carPlate ? `<tr><td>Vehicle Plate</td><td>${carPlate}</td></tr>` : ''}
+      ${date ? `<tr><td>Service Date</td><td>${date}</td></tr>` : ''}
+    </table>
+    <p>Please come pick up your vehicle at your earliest convenience.</p>
+    <div style="background:#d4edda;border-left:4px solid #28a745;padding:12px 16px;border-radius:4px;margin:16px 0;">
+      <strong>📍 Location:</strong> Brisa Motors, Thika, Kenya<br/>
+      <strong>📞 Phone:</strong> <a href="https://wa.me/254715594628">+254 715 594 628</a><br/>
+      <strong>🕐 Hours:</strong> Mon – Sat: 8am – 6pm
+    </div>
+    <p style="font-size:13px;color:#666;">If you have any questions, reply to this email or WhatsApp us directly.</p>
+    <a href="https://wa.me/254715594628" class="btn">WhatsApp Us</a>
+  `);
+  await sendMail({ to: email, subject: '✅ Your Vehicle is Ready for Pickup – Brisa Motors', html });
+}
+
 module.exports = {
   sendWelcomeEmail,
   sendAppointmentConfirmEmail,
   sendPaymentReceiptEmail,
   sendPasswordResetEmail,
   sendContactAckEmail,
+  sendPickupReadyEmail,
   adminNewUser,
   adminNewAppointment,
   adminPaymentReceived,
